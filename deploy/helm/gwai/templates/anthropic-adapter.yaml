@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gwai.fullname" . }}-anthropic-adapter
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anthropic-adapter
+spec:
+  replicas: {{ .Values.anthropicAdapter.replicas }}
+  selector:
+    matchLabels:
+      {{- include "gwai.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: anthropic-adapter
+  template:
+    metadata:
+      labels:
+        {{- include "gwai.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: anthropic-adapter
+      annotations:
+        checksum/dapr-token-secrets: {{ include (print $.Template.BasePath "/dapr-token-secrets.yaml") . | sha256sum }}
+        {{- if .Values.dapr.enabled }}
+        dapr.io/enabled: "true"
+        dapr.io/app-id: {{ include "gwai.fullname" . }}-anthropic-adapter
+        dapr.io/app-port: {{ .Values.anthropicAdapter.port | quote }}
+        dapr.io/app-protocol: http
+        dapr.io/config: {{ include "gwai.fullname" . }}-anthropic-adapter
+        dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
+        dapr.io/log-as-json: "true"
+        dapr.io/enable-api-logging: {{ .Values.dapr.apiLogging | quote }}
+        dapr.io/max-body-size: "16Mi"
+        dapr.io/api-token-secret: {{ include "gwai.daprAPISecretName" . }}
+        dapr.io/app-token-secret: {{ include "gwai.appAPISecretName" . }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "gwai.anthropicServiceAccountName" . }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: anthropic-adapter
+          image: {{ include "gwai.image" (dict "root" . "repository" .Values.images.anthropicAdapter.repository) }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: {{ .Values.anthropicAdapter.port | quote }}
+            - name: GWAI_CONTROL_PLANE_APP_ID
+              value: {{ include "gwai.fullname" . }}-control-plane
+            - name: GWAI_MAX_BODY_BYTES
+              value: {{ int64 .Values.anthropicAdapter.maxBodyBytes | quote }}
+            - name: GWAI_PROVIDER_TIMEOUT
+              value: {{ .Values.anthropicAdapter.providerTimeout | quote }}
+            - name: DAPR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gwai.daprAPISecretName" . }}
+                  key: token
+            - name: APP_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gwai.appAPISecretName" . }}
+                  key: token
+          ports:
+            - name: http
+              containerPort: {{ .Values.anthropicAdapter.port }}
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.anthropicAdapter.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

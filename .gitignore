@@ -1,0 +1,18 @@
+# Go build and test artifacts
+/bin/
+/dist/
+/coverage/
+*.coverprofile
+*.test
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.local.yaml
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+

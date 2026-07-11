@@ -1,0 +1,6 @@
+{{- if not .Values.dapr.enabled }}
+{{- fail "dapr.enabled=false is unsupported because gwai requires Dapr building blocks" }}
+{{- end }}
+{{- if and .Values.valkey.enabled .Values.valkey.tls.enabled }}
+{{- fail "valkey.tls.enabled is only supported for an external Valkey endpoint (valkey.enabled=false)" }}
+{{- end }}

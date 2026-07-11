@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gwai.fullname" . }}-control-plane
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "gwai.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: control-plane
+  template:
+    metadata:
+      labels:
+        {{- include "gwai.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: control-plane
+      annotations:
+        checksum/admin-secret: {{ include (print $.Template.BasePath "/admin-secret.yaml") . | sha256sum }}
+        checksum/dapr-token-secrets: {{ include (print $.Template.BasePath "/dapr-token-secrets.yaml") . | sha256sum }}
+        {{- if .Values.dapr.enabled }}
+        dapr.io/enabled: "true"
+        dapr.io/app-id: {{ include "gwai.fullname" . }}-control-plane
+        dapr.io/app-port: {{ .Values.controlPlane.port | quote }}
+        dapr.io/app-protocol: http
+        dapr.io/config: {{ include "gwai.fullname" . }}-control-plane
+        dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
+        dapr.io/log-as-json: "true"
+        dapr.io/enable-api-logging: {{ .Values.dapr.apiLogging | quote }}
+        dapr.io/disable-builtin-k8s-secret-store: "true"
+        dapr.io/api-token-secret: {{ include "gwai.daprAPISecretName" . }}
+        dapr.io/app-token-secret: {{ include "gwai.appAPISecretName" . }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "gwai.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: control-plane
+          image: {{ include "gwai.image" (dict "root" . "repository" .Values.images.controlPlane.repository) }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: {{ .Values.controlPlane.port | quote }}
+            - name: GWAI_STATE_STORE
+              value: {{ .Values.dapr.stateStoreName | quote }}
+            - name: GWAI_MAX_BODY_BYTES
+              value: {{ int64 .Values.controlPlane.maxBodyBytes | quote }}
+            - name: GWAI_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gwai.adminSecretName" . }}
+                  key: {{ .Values.admin.secretKey }}
+            - name: DAPR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gwai.daprAPISecretName" . }}
+                  key: token
+            - name: APP_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gwai.appAPISecretName" . }}
+                  key: token
+          ports:
+            - name: http
+              containerPort: {{ .Values.controlPlane.port }}
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gwai.fullname" . }}-control-plane
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  selector:
+    {{- include "gwai.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+  ports:
+    - name: http
+      port: {{ .Values.controlPlane.port }}
+      targetPort: http

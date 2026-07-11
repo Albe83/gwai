@@ -1,0 +1,14 @@
+.git
+.github
+.gitignore
+api
+bin
+dist
+coverage
+deploy
+docs
+scripts
+test
+*.md
+*.coverprofile
+*.test

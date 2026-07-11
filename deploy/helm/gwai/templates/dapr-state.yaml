@@ -1,0 +1,28 @@
+{{- if .Values.dapr.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.dapr.stateStoreName }}
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: {{ include "gwai.valkeyHost" . | quote }}
+    - name: redisPassword
+      {{- if or .Values.valkey.enabled .Values.valkey.auth.existingSecret }}
+      secretKeyRef:
+        name: {{ include "gwai.valkeyAuthSecretName" . }}
+        key: {{ .Values.valkey.auth.secretKey }}
+      {{- else }}
+      value: ""
+      {{- end }}
+    - name: enableTLS
+      value: {{ .Values.valkey.tls.enabled | quote }}
+    - name: actorStateStore
+      value: "false"
+scopes:
+  - {{ include "gwai.fullname" . }}-control-plane
+{{- end }}
