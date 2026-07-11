@@ -1,0 +1,26 @@
+{{- if .Values.dapr.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: {{ include "gwai.fullname" . }}-service-invocation
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+scopes:
+  - {{ include "gwai.fullname" . }}-openai-gateway
+  - {{ include "gwai.fullname" . }}-anthropic-adapter
+spec:
+  policies:
+    retries:
+      # Kubernetes endpoint rotation can outlive Dapr's default three retries.
+      # This reserved policy overrides only sidecar-to-sidecar connection errors.
+      DaprBuiltInServiceRetries:
+        policy: constant
+        duration: 1s
+        maxRetries: 40
+  targets:
+    apps:
+      {{ include "gwai.fullname" . }}-control-plane:
+        retry: DaprBuiltInServiceRetries
+      {{ include "gwai.fullname" . }}-anthropic-adapter:
+        retry: DaprBuiltInServiceRetries
+{{- end }}

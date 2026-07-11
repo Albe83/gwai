@@ -1,0 +1,118 @@
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  image:
+    registry: ""
+    tag: dev
+    pullPolicy: IfNotPresent
+
+images:
+  controlPlane:
+    repository: gwai-control-plane
+  openaiGateway:
+    repository: gwai-openai-gateway
+  anthropicAdapter:
+    repository: gwai-anthropic-adapter
+
+serviceAccount:
+  create: true
+  annotations: {}
+
+admin:
+  # If empty, Helm creates an admin Secret with a random token and preserves it
+  # across upgrades. Set existingSecret to manage it outside this chart.
+  existingSecret: ""
+  secretKey: admin-token
+
+security:
+  # Empty existingSecret values make Helm generate and preserve random tokens.
+  daprAPI:
+    existingSecret: ""
+  appAPI:
+    existingSecret: ""
+
+dapr:
+  enabled: true
+  stateStoreName: gwai-state
+  logLevel: info
+  apiLogging: false
+  tracingSamplingRate: "1"
+
+controlPlane:
+  replicas: 1
+  port: 8080
+  maxBodyBytes: 1048576
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+openaiGateway:
+  replicas: 1
+  port: 8080
+  maxBodyBytes: 10485760
+  requestTimeout: 5m
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+anthropicAdapter:
+  replicas: 1
+  port: 8080
+  maxBodyBytes: 10485760
+  providerTimeout: 5m
+  # Kubernetes RBAC and the Dapr secret scope are restricted to these provider
+  # credential Secrets. Add names here before referencing them.
+  secretNames:
+    - gwai-anthropic
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+valkey:
+  enabled: true
+  image:
+    repository: valkey/valkey
+    tag: 9.1.0-alpine
+    pullPolicy: IfNotPresent
+  host: ""
+  port: 6379
+  auth:
+    # If empty, the bundled instance gets a generated, upgrade-stable password.
+    # For either bundled or external Valkey, set an existing Secret to manage
+    # the password outside this chart.
+    existingSecret: ""
+    secretKey: password
+  tls:
+    enabled: false
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

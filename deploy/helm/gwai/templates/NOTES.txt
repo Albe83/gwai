@@ -1,0 +1,12 @@
+gwai is installed in namespace {{ .Release.Namespace }}.
+
+Read the generated control-plane admin token:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "gwai.adminSecretName" . }} -o jsonpath='{.data.{{ .Values.admin.secretKey }}}' | base64 -d
+
+Reach the APIs locally:
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.fullname" . }}-control-plane 8081:{{ .Values.controlPlane.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.fullname" . }}-openai-gateway 8080:{{ .Values.openaiGateway.service.port }}
+
+Provider API keys are not Helm values. Create a Kubernetes Secret and reference
+its name/key when creating the provider in the control-plane API.
+

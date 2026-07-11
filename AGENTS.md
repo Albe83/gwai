@@ -12,9 +12,33 @@
 - **Merge strategy:** squash and merge; delete the branch after merge
 - **Releases:** semver tags from `main` (`vMAJOR.MINOR.PATCH`)
 
-## No Tooling Yet
+## Tooling and Architecture
 
-This repo currently has no source code, package manager, build system, or CI pipeline. Treat all tooling choices as open until the stack is decided.
+- Go 1.26 monorepo; runtime code currently uses only the standard library
+- Three service binaries under `cmd/`: control plane, OpenAI gateway, and
+  Anthropic adapter
+- Dapr HTTP service invocation, state, and secret-store building blocks
+- Helm chart under `deploy/helm/gwai` for k3s/Kubernetes
+- Valkey 9.1 is the local transactional state backend through Dapr `state.redis`
+- The versioned provider-neutral contract lives under `api/ir`
+
+Run the required local gate before proposing a change:
+
+```bash
+make check
+```
+
+Useful targets:
+
+```bash
+make build
+make local-deploy
+make e2e-k3s
+```
+
+Preserve the adapter boundary: client protocols translate to/from the IR and
+provider adapters translate to/from the same IR. Do not add direct
+client-provider converters or place provider credentials in IR payloads.
 
 ## Contribution Policy
 

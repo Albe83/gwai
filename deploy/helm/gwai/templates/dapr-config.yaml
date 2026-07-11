@@ -1,0 +1,90 @@
+{{- if .Values.dapr.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: {{ include "gwai.fullname" . }}-control-plane
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+spec:
+  tracing:
+    samplingRate: {{ .Values.dapr.tracingSamplingRate | quote }}
+  api:
+    allowed:
+      - name: state
+        version: v1.0
+        protocol: http
+  accessControl:
+    defaultAction: deny
+    trustDomain: public
+    policies:
+      - appId: {{ include "gwai.fullname" . }}-openai-gateway
+        namespace: {{ .Release.Namespace }}
+        trustDomain: public
+        defaultAction: deny
+        operations:
+          - name: /internal/v1/authorize
+            httpVerb: ["POST"]
+            action: allow
+          - name: /internal/v1/routes/resolve
+            httpVerb: ["POST"]
+            action: allow
+      - appId: {{ include "gwai.fullname" . }}-anthropic-adapter
+        namespace: {{ .Release.Namespace }}
+        trustDomain: public
+        defaultAction: deny
+        operations:
+          - name: /internal/v1/providers/resolve
+            httpVerb: ["POST"]
+            action: allow
+---
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: {{ include "gwai.fullname" . }}-anthropic-adapter
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+spec:
+  tracing:
+    samplingRate: {{ .Values.dapr.tracingSamplingRate | quote }}
+  api:
+    allowed:
+      - name: invoke
+        version: v1.0
+        protocol: http
+      - name: secrets
+        version: v1.0
+        protocol: http
+  secrets:
+    scopes:
+      - storeName: kubernetes
+        defaultAccess: deny
+        allowedSecrets:
+          {{- toYaml .Values.anthropicAdapter.secretNames | nindent 10 }}
+  accessControl:
+    defaultAction: deny
+    trustDomain: public
+    policies:
+      - appId: {{ include "gwai.fullname" . }}-openai-gateway
+        namespace: {{ .Release.Namespace }}
+        trustDomain: public
+        defaultAction: deny
+        operations:
+          - name: /v1/generate
+            httpVerb: ["POST"]
+            action: allow
+---
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: {{ include "gwai.fullname" . }}-openai-gateway
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+spec:
+  tracing:
+    samplingRate: {{ .Values.dapr.tracingSamplingRate | quote }}
+  api:
+    allowed:
+      - name: invoke
+        version: v1.0
+        protocol: http
+{{- end }}
