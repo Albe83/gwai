@@ -1,34 +1,32 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "gwai.controlPlaneName" . }}
+  name: {{ include "gwai.adminWebUIName" . }}
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
-    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/component: admin-webui
 spec:
-  replicas: {{ .Values.controlPlane.replicas }}
+  replicas: {{ .Values.adminWebUI.replicas }}
   strategy:
-    # Compound unique indexes are protected by a process-local mutex. Recreate
-    # preserves the single-writer invariant during upgrades.
     type: Recreate
   selector:
     matchLabels:
       {{- include "gwai.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: control-plane
+      app.kubernetes.io/component: admin-webui
   template:
     metadata:
       labels:
         {{- include "gwai.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: control-plane
+        app.kubernetes.io/component: admin-webui
       annotations:
         checksum/admin-secret: {{ include (print $.Template.BasePath "/admin-secret.yaml") . | sha256sum }}
         checksum/dapr-token-secrets: {{ include (print $.Template.BasePath "/dapr-token-secrets.yaml") . | sha256sum }}
         {{- if .Values.dapr.enabled }}
         dapr.io/enabled: "true"
-        dapr.io/app-id: {{ include "gwai.controlPlaneName" . }}
-        dapr.io/app-port: {{ .Values.controlPlane.port | quote }}
+        dapr.io/app-id: {{ include "gwai.adminWebUIName" . }}
+        dapr.io/app-port: {{ .Values.adminWebUI.port | quote }}
         dapr.io/app-protocol: http
-        dapr.io/config: {{ include "gwai.controlPlaneName" . }}
+        dapr.io/config: {{ include "gwai.adminWebUIName" . }}
         dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
         dapr.io/log-as-json: "true"
         dapr.io/enable-api-logging: {{ .Values.dapr.apiLogging | quote }}
@@ -39,6 +37,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.adminWebUI.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "gwai.serviceAccountName" . }}
       automountServiceAccountToken: false
       securityContext:
@@ -46,20 +45,24 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: control-plane
-          image: {{ include "gwai.image" (dict "root" . "repository" .Values.images.controlPlane.repository) }}
+        - name: admin-webui
+          image: {{ include "gwai.image" (dict "root" . "repository" .Values.images.adminWebUI.repository) }}
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           env:
             - name: PORT
-              value: {{ .Values.controlPlane.port | quote }}
-            - name: GWAI_CONTROL_STATE_STORE
-              value: {{ .Values.dapr.stateStores.controlPlane.name | quote }}
-            - name: GWAI_PROVIDER_STATE_STORE
-              value: {{ .Values.dapr.stateStores.providers.name | quote }}
+              value: {{ .Values.adminWebUI.port | quote }}
+            - name: GWAI_RESOURCE_CONTROL_APP_ID
+              value: {{ include "gwai.controlPlaneName" . | quote }}
             - name: GWAI_VIRTUAL_KEY_CONTROL_APP_ID
               value: {{ include "gwai.virtualKeyControlPlaneName" . | quote }}
+            - name: GWAI_ADMIN_UI_SESSION_TTL
+              value: {{ printf "%ds" (int .Values.adminWebUI.sessionTTLSeconds) | quote }}
+            - name: GWAI_REQUEST_TIMEOUT
+              value: {{ printf "%ds" (int .Values.adminWebUI.requestTimeoutSeconds) | quote }}
+            - name: GWAI_ADMIN_UI_SECURE_COOKIES
+              value: {{ .Values.adminWebUI.secureCookies | quote }}
             - name: GWAI_MAX_BODY_BYTES
-              value: {{ int64 .Values.controlPlane.maxBodyBytes | quote }}
+              value: {{ int64 .Values.adminWebUI.maxBodyBytes | quote }}
             - name: GWAI_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -72,7 +75,7 @@ spec:
                   key: token
           ports:
             - name: http
-              containerPort: {{ .Values.controlPlane.port }}
+              containerPort: {{ .Values.adminWebUI.port }}
           livenessProbe:
             httpGet:
               path: /livez
@@ -89,7 +92,7 @@ spec:
             capabilities:
               drop: ["ALL"]
           resources:
-            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+            {{- toYaml .Values.adminWebUI.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -106,15 +109,16 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "gwai.controlPlaneName" . }}
+  name: {{ include "gwai.adminWebUIName" . }}
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
-    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/component: admin-webui
 spec:
+  type: {{ .Values.adminWebUI.service.type }}
   selector:
     {{- include "gwai.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/component: admin-webui
   ports:
     - name: http
-      port: {{ .Values.controlPlane.port }}
+      port: {{ .Values.adminWebUI.service.port }}
       targetPort: http

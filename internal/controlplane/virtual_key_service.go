@@ -142,8 +142,22 @@ func (s *VirtualKeyService) ListVirtualKeys(ctx context.Context) ([]PublicVirtua
 }
 
 func (s *VirtualKeyService) UpdateVirtualKey(ctx context.Context, id string, input VirtualKeyInput) (PublicVirtualKey, error) {
+	return s.updateVirtualKey(ctx, id, input, ifMatchPrecondition{})
+}
+
+// UpdateVirtualKeyIfMatch optionally enforces the strong ETag of the public
+// key representation after current state is loaded. The repository's entity
+// and subject ETag transaction still rejects a race before the write commits.
+func (s *VirtualKeyService) UpdateVirtualKeyIfMatch(ctx context.Context, id string, input VirtualKeyInput, ifMatch string) (PublicVirtualKey, error) {
+	return s.updateVirtualKey(ctx, id, input, optionalIfMatch(ifMatch))
+}
+
+func (s *VirtualKeyService) updateVirtualKey(ctx context.Context, id string, input VirtualKeyInput, precondition ifMatchPrecondition) (PublicVirtualKey, error) {
 	current, err := s.keys.GetVirtualKey(ctx, id)
 	if err != nil {
+		return PublicVirtualKey{}, err
+	}
+	if err := enforceIfMatch(precondition, current.Public()); err != nil {
 		return PublicVirtualKey{}, err
 	}
 	input, err = s.normalizeInput(ctx, input)
@@ -164,8 +178,21 @@ func (s *VirtualKeyService) UpdateVirtualKey(ctx context.Context, id string, inp
 }
 
 func (s *VirtualKeyService) DeleteVirtualKey(ctx context.Context, id string) error {
+	return s.deleteVirtualKey(ctx, id, ifMatchPrecondition{})
+}
+
+// DeleteVirtualKeyIfMatch deletes a key only when a non-empty validator
+// matches the current public representation, which never includes the hash.
+func (s *VirtualKeyService) DeleteVirtualKeyIfMatch(ctx context.Context, id, ifMatch string) error {
+	return s.deleteVirtualKey(ctx, id, optionalIfMatch(ifMatch))
+}
+
+func (s *VirtualKeyService) deleteVirtualKey(ctx context.Context, id string, precondition ifMatchPrecondition) error {
 	key, err := s.keys.GetVirtualKey(ctx, id)
 	if err != nil {
+		return err
+	}
+	if err := enforceIfMatch(precondition, key.Public()); err != nil {
 		return err
 	}
 	return s.keys.DeleteVirtualKey(ctx, key)

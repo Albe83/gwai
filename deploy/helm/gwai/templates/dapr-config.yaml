@@ -20,6 +20,27 @@ spec:
   accessControl:
     defaultAction: deny
     trustDomain: public
+    policies:
+      - appId: {{ include "gwai.adminWebUIName" . }}
+        namespace: {{ .Release.Namespace }}
+        trustDomain: public
+        defaultAction: deny
+        operations:
+          - name: /v1/users
+            # Dapr 1.18 returns a collection ACL node as a prefix match before
+            # consulting its item wildcard. Include item verbs here as a
+            # compatibility superset; the Go mux rejects invalid combinations.
+            httpVerb: ["GET", "POST", "PUT", "DELETE"]
+            action: allow
+          - name: /v1/users/*
+            httpVerb: ["GET", "PUT", "DELETE"]
+            action: allow
+          - name: /v1/providers
+            httpVerb: ["GET", "POST", "PUT", "DELETE"]
+            action: allow
+          - name: /v1/providers/*
+            httpVerb: ["GET", "PUT", "DELETE"]
+            action: allow
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
@@ -53,6 +74,35 @@ spec:
           - name: /internal/v1/subjects/fence
             httpVerb: ["POST"]
             action: allow
+      - appId: {{ include "gwai.adminWebUIName" . }}
+        namespace: {{ .Release.Namespace }}
+        trustDomain: public
+        defaultAction: deny
+        operations:
+          - name: /v1/virtual-keys
+            httpVerb: ["GET", "POST", "PUT", "DELETE"]
+            action: allow
+          - name: /v1/virtual-keys/*
+            httpVerb: ["GET", "PUT", "DELETE"]
+            action: allow
+---
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: {{ include "gwai.adminWebUIName" . }}
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+spec:
+  tracing:
+    samplingRate: {{ .Values.dapr.tracingSamplingRate | quote }}
+  api:
+    allowed:
+      - name: invoke
+        version: v1.0
+        protocol: http
+  accessControl:
+    defaultAction: deny
+    trustDomain: public
 {{- range $adapter := .Values.providerAdapters }}
 ---
 apiVersion: dapr.io/v1alpha1

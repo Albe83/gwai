@@ -169,11 +169,26 @@ func (s *ResourceService) ListUsers(ctx context.Context) ([]User, error) {
 }
 
 func (s *ResourceService) UpdateUser(ctx context.Context, id string, input UserInput) (User, error) {
+	return s.updateUser(ctx, id, input, ifMatchPrecondition{})
+}
+
+// UpdateUserIfMatch performs the same complete replacement as UpdateUser and,
+// when ifMatch is non-empty, rejects a stale public representation. The check
+// runs after loading current state; ReplaceUser's expected-record CAS protects
+// the remaining interval before commit.
+func (s *ResourceService) UpdateUserIfMatch(ctx context.Context, id string, input UserInput, ifMatch string) (User, error) {
+	return s.updateUser(ctx, id, input, optionalIfMatch(ifMatch))
+}
+
+func (s *ResourceService) updateUser(ctx context.Context, id string, input UserInput, precondition ifMatchPrecondition) (User, error) {
 	s.userMu.Lock()
 	defer s.userMu.Unlock()
 
 	current, err := s.users.GetUser(ctx, id)
 	if err != nil {
+		return User{}, err
+	}
+	if err := enforceIfMatch(precondition, current); err != nil {
 		return User{}, err
 	}
 	if input.Status == "" {
@@ -209,11 +224,25 @@ func (s *ResourceService) UpdateUser(ctx context.Context, id string, input UserI
 }
 
 func (s *ResourceService) DeleteUser(ctx context.Context, id string) error {
+	return s.deleteUser(ctx, id, ifMatchPrecondition{})
+}
+
+// DeleteUserIfMatch deletes a user only when a non-empty validator matches its
+// current public representation. An empty validator preserves the original
+// unconditional service contract.
+func (s *ResourceService) DeleteUserIfMatch(ctx context.Context, id, ifMatch string) error {
+	return s.deleteUser(ctx, id, optionalIfMatch(ifMatch))
+}
+
+func (s *ResourceService) deleteUser(ctx context.Context, id string, precondition ifMatchPrecondition) error {
 	s.userMu.Lock()
 	defer s.userMu.Unlock()
 
 	user, err := s.users.GetUser(ctx, id)
 	if err != nil {
+		return err
+	}
+	if err := enforceIfMatch(precondition, user); err != nil {
 		return err
 	}
 	fence := user
@@ -325,8 +354,22 @@ func (s *ResourceService) ListProviders(ctx context.Context) ([]Provider, error)
 }
 
 func (s *ResourceService) UpdateProvider(ctx context.Context, id string, input ProviderInput) (Provider, error) {
+	return s.updateProvider(ctx, id, input, ifMatchPrecondition{})
+}
+
+// UpdateProviderIfMatch optionally enforces a strong public ETag after loading
+// the current provider. Repository CAS remains authoritative if another writer
+// commits between this precondition check and replacement.
+func (s *ResourceService) UpdateProviderIfMatch(ctx context.Context, id string, input ProviderInput, ifMatch string) (Provider, error) {
+	return s.updateProvider(ctx, id, input, optionalIfMatch(ifMatch))
+}
+
+func (s *ResourceService) updateProvider(ctx context.Context, id string, input ProviderInput, precondition ifMatchPrecondition) (Provider, error) {
 	current, err := s.providers.GetProvider(ctx, id)
 	if err != nil {
+		return Provider{}, err
+	}
+	if err := enforceIfMatch(precondition, current); err != nil {
 		return Provider{}, err
 	}
 	input, err = normalizeProviderInput(input)
@@ -354,8 +397,21 @@ func (s *ResourceService) UpdateProvider(ctx context.Context, id string, input P
 }
 
 func (s *ResourceService) DeleteProvider(ctx context.Context, id string) error {
+	return s.deleteProvider(ctx, id, ifMatchPrecondition{})
+}
+
+// DeleteProviderIfMatch deletes a provider only when a non-empty validator
+// matches its current public representation.
+func (s *ResourceService) DeleteProviderIfMatch(ctx context.Context, id, ifMatch string) error {
+	return s.deleteProvider(ctx, id, optionalIfMatch(ifMatch))
+}
+
+func (s *ResourceService) deleteProvider(ctx context.Context, id string, precondition ifMatchPrecondition) error {
 	provider, err := s.providers.GetProvider(ctx, id)
 	if err != nil {
+		return err
+	}
+	if err := enforceIfMatch(precondition, provider); err != nil {
 		return err
 	}
 	return s.providers.DeleteProvider(ctx, provider)

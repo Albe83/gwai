@@ -29,6 +29,9 @@ See [protocol compatibility](docs/protocol-compatibility.md) for exact limits.
 
 ```mermaid
 flowchart LR
+    Admin[Administrator browser] --> UI[Administrative WebUI]
+    UI -->|authenticated Dapr BFF calls| CP
+    UI -->|authenticated Dapr BFF calls| KP
     Clients[OpenAI / Anthropic / Gemini clients] --> Gateways[Four protocol gateways]
     CP[Resource control plane<br/>users + providers] -->|private users| CS[(Control state)]
     CP -->|provider lifecycle| PS[(Provider state)]
@@ -55,6 +58,8 @@ databases. The contract is
 ## What works
 
 - Separate CRUD services for users/providers and virtual keys.
+- A server-rendered administrative WebUI for user, provider and virtual-key
+  lifecycle operations; the admin credential remains in its Go backend.
 - One-time virtual-key disclosure with exact `provider/model` allowlists,
   expiry and user/key/provider disablement.
 - Revisioned user-subject projection, atomic deletion fencing and fail-closed
@@ -74,8 +79,15 @@ Helm 3, curl and jq.
 ```bash
 make local-deploy
 kubectl -n gwai get pods
+kubectl -n gwai port-forward service/gwai-admin-webui 28087:8080
 make e2e-k3s
 ```
+
+Open `http://127.0.0.1:28087` and sign in with the generated admin token. The
+WebUI is deliberately a cluster-internal Service; use TLS before exposing it
+beyond loopback or a trusted network. See
+[getting started](docs/getting-started.md) for the complete login and
+provisioning flow.
 
 The default chart exposes all four gateways and deploys one Anthropic adapter
 with provider slug `anthropic` and Dapr app ID `gwai-anthropic`. Follow
@@ -87,7 +99,7 @@ providers.
 ```bash
 make check       # formatting, vet, race tests, contract checks, Helm lint
 make build       # both control-plane, all gateway and adapter binaries
-make images      # all ten OCI images
+make images      # all service OCI images, including the administrative WebUI
 make helm-lint
 ```
 

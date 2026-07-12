@@ -1,0 +1,157 @@
+{{define "nav"}}
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">gwai <span>admin</span></a>
+  <nav aria-label="Primary navigation">
+    <a href="/" {{if eq .Section "dashboard"}}aria-current="page"{{end}}>Dashboard</a>
+    <a href="/users" {{if eq .Section "users"}}aria-current="page"{{end}}>Users</a>
+    <a href="/providers" {{if eq .Section "providers"}}aria-current="page"{{end}}>Providers</a>
+    <a href="/virtual-keys" {{if eq .Section "virtual-keys"}}aria-current="page"{{end}}>Virtual keys</a>
+  </nav>
+  <form method="post" action="/logout" class="logout-form">
+    <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+    <button type="submit" class="button button-quiet">Sign out</button>
+  </form>
+</header>
+{{end}}
+
+{{define "messages"}}
+{{range .Flashes}}<div class="notice notice-{{.Kind}}" role="status">{{.Message}}</div>{{end}}
+{{range .Warnings}}<div class="notice notice-warning" role="status">{{.}}</div>{{end}}
+{{with .Error}}
+<div class="notice notice-error" role="alert" tabindex="-1">
+  <strong>{{.Title}}</strong>
+  {{if .Detail}}<p>{{.Detail}}</p>{{end}}
+  {{if .RequestID}}<p class="request-id">Request ID: <code>{{.RequestID}}</code></p>{{end}}
+</div>
+{{end}}
+{{end}}
+
+{{define "login"}}
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head>
+<body class="login-page"><main id="main-content" class="login-card">
+  <p class="eyebrow">Gateway AI</p><h1>Administration</h1>
+  <p class="lede">Use the cluster administrator token to establish a short-lived server session. The UI never puts it in browser storage.</p>
+  {{template "messages" .}}
+  <form method="post" action="/login" class="stack">
+    <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+    <label for="admin-token">Administrator token</label>
+    <input id="admin-token" name="admin_token" type="password" required autocomplete="off" autofocus>
+    <button type="submit" class="button button-primary">Sign in</button>
+  </form>
+</main></body></html>
+{{end}}
+
+{{define "dashboard"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{template "nav" .}}<main id="main-content" class="container"><div class="page-heading"><div><p class="eyebrow">Operations</p><h1>Dashboard</h1><p>Independent status for each administrative domain.</p></div></div>
+{{template "messages" .}}
+<section class="dashboard-grid" aria-label="Administrative resources">
+  <article class="summary-card"><div class="summary-top"><h2>Users</h2>{{if .ResourceSection.Available}}<span class="availability available">Available</span>{{else}}<span class="availability unavailable">Degraded</span>{{end}}</div><p class="metric">{{len .Users}}</p><p>Identities and global authorization status.</p><a href="/users">Manage users →</a></article>
+  <article class="summary-card"><div class="summary-top"><h2>Providers</h2>{{if .ResourceSection.Available}}<span class="availability available">Available</span>{{else}}<span class="availability unavailable">Degraded</span>{{end}}</div><p class="metric">{{len .Providers}}</p><p>Provider routes and adapter references.</p><a href="/providers">Manage providers →</a></article>
+  <article class="summary-card"><div class="summary-top"><h2>Virtual keys</h2>{{if .KeySection.Available}}<span class="availability available">Available</span>{{else}}<span class="availability unavailable">Degraded</span>{{end}}</div><p class="metric">{{len .VirtualKeys}}</p><p>Client credentials, restrictions and expiry.</p><a href="/virtual-keys">Manage keys →</a></article>
+</section>
+{{if .ResourceSection.Error}}<div class="notice notice-warning">{{.ResourceSection.Error}} Provider operations may remain available even when user lifecycle synchronization is unavailable.</div>{{end}}
+{{if .KeySection.Error}}<div class="notice notice-warning">{{.KeySection.Error}} User and provider administration remains independent.</div>{{end}}
+</main></body></html>
+{{end}}
+
+{{define "users"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{template "nav" .}}<main id="main-content" class="container"><div class="page-heading"><div><p class="eyebrow">Resource control plane</p><h1>Users</h1><p>Disabling a user revokes all of their keys without rewriting them.</p></div><a class="button button-primary" href="/users/new">Create user</a></div>
+{{template "messages" .}}
+<form method="get" action="/users" class="filters"><label>Search <input name="q" type="search" value="{{.Query}}" placeholder="Name, email or ID"></label><label>Status <select name="status"><option value="">All</option><option value="active" {{if eq .StatusFilter "active"}}selected{{end}}>Active</option><option value="disabled" {{if eq .StatusFilter "disabled"}}selected{{end}}>Disabled</option></select></label><button class="button" type="submit">Filter</button></form>
+<div class="table-wrap"><table><thead><tr><th>User</th><th>Status</th><th>Keys</th><th>Revision</th><th>Updated</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+{{range .Users}}<tr><th scope="row"><strong>{{.Name}}</strong><small>{{.Email}}</small><small><code>{{.ID}}</code></small></th><td><span class="{{statusClass .Status}}">{{.Status}}</span></td><td>{{if $.RelationsAvailable}}{{index $.UserKeyCounts .ID}}{{else}}—{{end}}</td><td>{{.Revision}}</td><td>{{formatTime .UpdatedAt}}</td><td class="actions"><a class="button button-small" aria-label="Edit user {{.Name}}" href="/users/{{.ID}}/edit">Edit</a>{{if eq .Status "active"}}<a class="button button-small" aria-label="Disable user {{.Name}}" href="/users/{{.ID}}/status?to=disabled">Disable</a>{{else}}<a class="button button-small" aria-label="Enable user {{.Name}}" href="/users/{{.ID}}/status?to=active">Enable</a>{{end}}<a class="button button-small button-danger" aria-label="Delete user {{.Name}}" href="/users/{{.ID}}/delete">Delete</a></td></tr>{{else}}<tr><td colspan="6" class="empty">No users match the current filters.</td></tr>{{end}}
+</tbody></table></div></main></body></html>
+{{end}}
+
+{{define "user-form"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{template "nav" .}}<main id="main-content" class="container narrow"><div class="page-heading"><div><p class="eyebrow">User lifecycle</p><h1>{{if .Editing}}Edit user{{else}}Create user{{end}}</h1><p>PUT operations replace every editable field and advance the authorization revision.</p></div></div>{{template "messages" .}}
+<form method="post" {{if .Editing}}action="/users/{{.ResourceID}}"{{else}}action="/users"{{end}} class="form-card stack">
+<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{if .Editing}}<input type="hidden" name="_etag" value="{{.ResourceETag}}">{{end}}<label for="name">Name</label><input id="name" name="name" value="{{.UserForm.Name}}" maxlength="200" required autofocus>
+<label for="email">Email</label><input id="email" name="email" type="email" value="{{.UserForm.Email}}" required>
+<label for="status">Status</label><select id="status" name="status" required><option value="active" {{if eq .UserForm.Status "active"}}selected{{end}}>Active</option><option value="disabled" {{if eq .UserForm.Status "disabled"}}selected{{end}}>Disabled</option></select>
+<div class="form-actions"><button class="button button-primary" type="submit">{{if .Editing}}Save complete user{{else}}Create user{{end}}</button><a class="button button-quiet" href="/users">Cancel</a></div></form>
+<div class="notice notice-info"><strong>Fail-closed lifecycle</strong><p>A dependency failure may occur after canonical user state changed. Refresh the list and repeat a complete edit to repair projection synchronization; do not blindly repeat user creation.</p></div>
+</main></body></html>
+{{end}}
+
+{{define "providers"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{template "nav" .}}<main id="main-content" class="container"><div class="page-heading"><div><p class="eyebrow">Resource control plane</p><h1>Providers</h1><p>Runtime routes point to independently deployed Dapr adapter identities.</p></div><a class="button button-primary" href="/providers/new">Register provider</a></div>{{template "messages" .}}
+<form method="get" action="/providers" class="filters"><label>Search <input name="q" type="search" value="{{.Query}}" placeholder="Name, slug, kind or app ID"></label><label>Status <select name="status"><option value="">All</option><option value="active" {{if eq .StatusFilter "active"}}selected{{end}}>Active</option><option value="disabled" {{if eq .StatusFilter "disabled"}}selected{{end}}>Disabled</option></select></label><button class="button" type="submit">Filter</button></form>
+<div class="table-wrap"><table><thead><tr><th>Provider</th><th>Kind</th><th>Adapter app ID</th><th>Status</th><th>Endpoint</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+{{range .Providers}}<tr><th scope="row"><strong>{{.Name}}</strong><small><code>{{.Slug}}</code></small></th><td>{{.Kind}}</td><td><code>{{.AdapterAppID}}</code></td><td><span class="{{statusClass .Status}}">{{.Status}}</span></td><td><small>{{.BaseURL}} / {{.APIVersion}}</small></td><td class="actions"><a class="button button-small" aria-label="Edit provider {{.Name}}" href="/providers/{{.ID}}/edit">Edit</a>{{if eq .Status "active"}}<a class="button button-small" aria-label="Disable provider {{.Name}}" href="/providers/{{.ID}}/status?to=disabled">Disable</a>{{else}}<a class="button button-small" aria-label="Enable provider {{.Name}}" href="/providers/{{.ID}}/status?to=active">Enable</a>{{end}}<a class="button button-small button-danger" aria-label="Delete provider {{.Name}}" href="/providers/{{.ID}}/delete">Delete</a></td></tr>{{else}}<tr><td colspan="6" class="empty">No providers match the current filters.</td></tr>{{end}}
+</tbody></table></div></main></body></html>
+{{end}}
+
+{{define "provider-form"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{template "nav" .}}<main id="main-content" class="container narrow"><div class="page-heading"><div><p class="eyebrow">Provider lifecycle</p><h1>{{if .Editing}}Edit provider{{else}}Register provider{{end}}</h1><p>The matching adapter workload and Kubernetes Secret must already exist.</p></div></div>{{template "messages" .}}
+<form method="post" {{if .Editing}}action="/providers/{{.ResourceID}}"{{else}}action="/providers"{{end}} class="form-card form-grid">
+<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{if .Editing}}<input type="hidden" name="_etag" value="{{.ResourceETag}}">{{end}}<label>Slug<input name="slug" value="{{.ProviderForm.Slug}}" pattern="[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?" maxlength="63" required {{if .Editing}}readonly{{end}}><small>Immutable lowercase routing prefix.</small></label>
+<label>Name<input name="name" value="{{.ProviderForm.Name}}" maxlength="200" required></label>
+<label>Kind<select name="kind" required><option value="anthropic" {{if eq .ProviderForm.Kind "anthropic"}}selected{{end}}>Anthropic</option><option value="openai-chat" {{if eq .ProviderForm.Kind "openai-chat"}}selected{{end}}>OpenAI Chat</option><option value="openai-responses" {{if eq .ProviderForm.Kind "openai-responses"}}selected{{end}}>OpenAI Responses</option><option value="gemini" {{if eq .ProviderForm.Kind "gemini"}}selected{{end}}>Gemini</option></select></label>
+<label>Adapter Dapr app ID<input name="adapter_app_id" value="{{.ProviderForm.AdapterAppID}}" maxlength="63" required {{if .Editing}}readonly{{end}}><small>Immutable and must match the deployment.</small></label>
+<label class="span-2">Base URL<input name="base_url" type="url" value="{{.ProviderForm.BaseURL}}" placeholder="Leave empty for the provider default"></label>
+<label>API version<input name="api_version" value="{{.ProviderForm.APIVersion}}" maxlength="64" placeholder="Provider default"></label>
+<label>Status<select name="status" required><option value="active" {{if eq .ProviderForm.Status "active"}}selected{{end}}>Active</option><option value="disabled" {{if eq .ProviderForm.Status "disabled"}}selected{{end}}>Disabled</option></select></label>
+<fieldset class="span-2"><legend>Secret reference</legend><div class="form-grid"><label>Store<input name="secret_store" value="{{.ProviderForm.SecretStore}}" required></label><label>Name<input name="secret_name" value="{{.ProviderForm.SecretName}}" required></label><label>Key<input name="secret_key" value="{{.ProviderForm.SecretKey}}" placeholder="Defaults to secret name"></label><label>Namespace<input name="secret_namespace" value="{{.ProviderForm.SecretNamespace}}"></label></div></fieldset>
+<div class="form-actions span-2"><button class="button button-primary" type="submit">{{if .Editing}}Save complete provider{{else}}Register provider{{end}}</button><a class="button button-quiet" href="/providers">Cancel</a></div></form>
+<div class="notice notice-info"><strong>Registration only</strong><p>This form stores references; it does not deploy an adapter or create credential material. Changing kind must remain compatible with the immutable adapter app ID.</p></div>
+</main></body></html>
+{{end}}
+
+{{define "virtual-keys"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{template "nav" .}}<main id="main-content" class="container"><div class="page-heading"><div><p class="eyebrow">Virtual-key control plane</p><h1>Virtual keys</h1><p>Plaintext secrets are disclosed only during creation.</p></div><a class="button button-primary" href="/virtual-keys/new">Create virtual key</a></div>{{template "messages" .}}
+<form method="get" action="/virtual-keys" class="filters"><label>Search <input name="q" type="search" value="{{.Query}}" placeholder="Name, prefix, user or ID"></label><label>Status <select name="status"><option value="">All</option><option value="active" {{if eq .StatusFilter "active"}}selected{{end}}>Active</option><option value="disabled" {{if eq .StatusFilter "disabled"}}selected{{end}}>Disabled</option></select></label><label>Owner ID <input name="user_id" value="{{.UserFilter}}" list="filter-user-options" placeholder="Any owner"><datalist id="filter-user-options">{{range .Users}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</datalist></label><button class="button" type="submit">Filter</button></form>
+<div class="table-wrap"><table><thead><tr><th>Key</th><th>Owner</th><th>Status</th><th>Models</th><th>Expires</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+{{range .VirtualKeys}}<tr><th scope="row"><strong>{{.Name}}</strong><small><code>{{.Prefix}}…</code></small><small><code>{{.ID}}</code></small></th><td>{{with index $.UserNames .UserID}}{{.}}{{else}}<code>{{.UserID}}</code>{{end}}</td><td><span class="{{statusClass .Status}}">{{.Status}}</span></td><td>{{if .AllowedModels}}<details><summary>{{len .AllowedModels}} exact</summary>{{range .AllowedModels}}<code class="model">{{.}}</code>{{end}}</details>{{else}}All active providers{{end}}</td><td>{{if .ExpiresAt}}{{formatTime .ExpiresAt}}{{else}}Never{{end}}</td><td class="actions"><a class="button button-small" aria-label="Edit virtual key {{.Name}}" href="/virtual-keys/{{.ID}}/edit">Edit</a>{{if eq .Status "active"}}<a class="button button-small" aria-label="Disable virtual key {{.Name}}" href="/virtual-keys/{{.ID}}/status?to=disabled">Disable</a>{{else}}<a class="button button-small" aria-label="Enable virtual key {{.Name}}" href="/virtual-keys/{{.ID}}/status?to=active">Enable</a>{{end}}<a class="button button-small button-danger" aria-label="Delete virtual key {{.Name}}" href="/virtual-keys/{{.ID}}/delete">Delete</a></td></tr>{{else}}<tr><td colspan="6" class="empty">No virtual keys match the current filters.</td></tr>{{end}}
+</tbody></table></div></main></body></html>
+{{end}}
+
+{{define "virtual-key-form"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{template "nav" .}}<main id="main-content" class="container narrow"><div class="page-heading"><div><p class="eyebrow">Credential lifecycle</p><h1>{{if .Editing}}Edit virtual key{{else}}Create virtual key{{end}}</h1><p>Leaving allowed models empty permits every model on active providers.</p></div></div>{{template "messages" .}}
+<form method="post" {{if .Editing}}action="/virtual-keys/{{.ResourceID}}"{{else}}action="/virtual-keys"{{end}} class="form-card stack">
+<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{if .Editing}}<input type="hidden" name="_etag" value="{{.ResourceETag}}">{{else}}<input type="hidden" name="_operation" value="{{.OperationToken}}">{{end}}<label>Name<input name="name" value="{{.VirtualKeyForm.Name}}" maxlength="200" required autofocus></label>
+<label>Owner user ID<input name="user_id" value="{{.VirtualKeyForm.UserID}}" list="user-options" placeholder="usr_..." required><datalist id="user-options">{{range .Users}}<option value="{{.ID}}">{{.Name}} · {{.Email}} · {{.Status}}</option>{{end}}</datalist><small>An active key requires an active user. A known ID remains usable while the resource control plane is unavailable.</small></label>
+<label>Allowed models<textarea name="allowed_models" rows="6" placeholder="anthropic/claude-sonnet&#10;openai/gpt-model">{{.VirtualKeyForm.AllowedModels}}</textarea><small>One exact provider-slug/upstream-model per line. Upstream IDs may contain slashes.</small></label>
+{{if .Providers}}<div class="suggestions"><span>Known provider prefixes:</span>{{range .Providers}}<code>{{.Slug}}/</code>{{end}}</div>{{end}}
+<div class="form-grid"><label>Status<select name="status" required><option value="active" {{if eq .VirtualKeyForm.Status "active"}}selected{{end}}>Active</option><option value="disabled" {{if eq .VirtualKeyForm.Status "disabled"}}selected{{end}}>Disabled</option></select></label><label>Expires at (UTC)<input name="expires_at" type="datetime-local" step="any" value="{{.VirtualKeyForm.ExpiresAt}}"><small>Active keys require a future time.</small></label></div>
+<div class="form-actions"><button class="button button-primary" type="submit">{{if .Editing}}Save complete key{{else}}Create and reveal secret{{end}}</button><a class="button button-quiet" href="/virtual-keys">Cancel</a></div></form>
+{{if not .Editing}}<div class="notice notice-warning"><strong>One-time disclosure</strong><p>The next page is the only opportunity to save the plaintext key. It cannot be recovered later.</p></div>{{end}}
+</main></body></html>
+{{end}}
+
+{{define "key-reveal"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"><script src="/assets/app.js" defer></script></head><body>
+{{template "nav" .}}<main id="main-content" class="container narrow"><div class="page-heading"><div><p class="eyebrow">One-time disclosure</p><h1>Save this virtual key now</h1><p>This no-store response is the only disclosure. Reloading or resubmitting the form will not reveal the secret again.</p></div></div>{{template "messages" .}}
+<section class="reveal-card" aria-labelledby="reveal-name"><h2 id="reveal-name">{{.CreatedKey.VirtualKey.Name}}</h2><dl><div><dt>Key ID</dt><dd><code>{{.CreatedKey.VirtualKey.ID}}</code></dd></div><div><dt>Owner</dt><dd><code>{{.CreatedKey.VirtualKey.UserID}}</code></dd></div></dl><label for="one-time-secret">Plaintext secret</label><div class="secret-row"><input id="one-time-secret" readonly autocomplete="off" spellcheck="false" value="{{.CreatedKey.Key}}" aria-describedby="secret-warning"><button type="button" class="button button-primary" data-copy-target="one-time-secret">Copy</button></div><p id="copy-status" class="copy-status" aria-live="polite"></p><p id="secret-warning" class="notice notice-warning">Store it in a secret manager. The WebUI does not retain this plaintext after rendering the response.</p><a class="button" href="/virtual-keys">I saved the key</a></section>
+</main></body></html>
+{{end}}
+
+{{define "confirm-status"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{template "nav" .}}<main id="main-content" class="container narrow"><div class="page-heading"><div><p class="eyebrow">Lifecycle operation</p><h1>{{.Lifecycle.ButtonText}}</h1><p>You are changing <strong>{{.Lifecycle.Name}}</strong> to <span class="status {{if eq .Lifecycle.Status "active"}}status-active{{else}}status-disabled{{end}}">{{.Lifecycle.Status}}</span>.</p></div></div>{{template "messages" .}}
+<section class="form-card stack"><div class="notice notice-warning"><strong>Review the impact</strong><p>{{.Lifecycle.Warning}}</p></div><form method="post" action="{{.Lifecycle.Action}}" class="form-actions"><input type="hidden" name="_csrf" value="{{.CSRFToken}}"><input type="hidden" name="_etag" value="{{.Lifecycle.ETag}}"><input type="hidden" name="status" value="{{.Lifecycle.Status}}"><button type="submit" class="button {{if eq .Lifecycle.Status "disabled"}}button-danger{{else}}button-primary{{end}}">{{.Lifecycle.ButtonText}}</button><a class="button button-quiet" href="{{.Lifecycle.Cancel}}">Cancel</a></form></section>
+</main></body></html>
+{{end}}
+
+{{define "confirm-delete"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{template "nav" .}}<main id="main-content" class="container narrow"><div class="page-heading"><div><p class="eyebrow">Destructive operation</p><h1>Delete {{.Confirm.Kind}}</h1><p>You are about to delete <strong>{{.Confirm.Name}}</strong>.</p></div></div>{{template "messages" .}}
+<section class="form-card stack"><div class="notice notice-warning"><strong>Review the impact</strong><p>{{.Confirm.Warning}}</p></div><form method="post" action="{{.Confirm.Action}}" class="form-actions"><input type="hidden" name="_csrf" value="{{.CSRFToken}}"><input type="hidden" name="_etag" value="{{.Confirm.ETag}}"><button type="submit" class="button button-danger">Delete permanently</button><a class="button button-quiet" href="{{.Confirm.Cancel}}">Cancel</a></form></section>
+</main></body></html>
+{{end}}
+
+{{define "error"}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · gwai admin</title><link rel="stylesheet" href="/assets/styles.css"></head><body>
+{{if .Authenticated}}{{template "nav" .}}{{end}}<main id="main-content" class="container narrow"><div class="page-heading"><div><p class="eyebrow">Request failed</p><h1>{{.Title}}</h1></div></div>{{template "messages" .}}<p><a class="button" href="{{if .Authenticated}}/{{else}}/login{{end}}">{{if .Authenticated}}Return to dashboard{{else}}Return to sign in{{end}}</a></p></main></body></html>
+{{end}}

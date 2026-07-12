@@ -41,6 +41,7 @@ jobs:
         service:
           - control-plane
           - virtual-key-control-plane
+          - admin-webui
           - openai-gateway
           - openai-responses-gateway
           - anthropic-gateway

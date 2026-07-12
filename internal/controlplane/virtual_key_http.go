@@ -52,7 +52,9 @@ func (h *VirtualKeyHTTPHandler) createVirtualKey(w http.ResponseWriter, r *http.
 		h.writeError(w, r, err)
 		return
 	}
-	platform.JSON(w, http.StatusCreated, key)
+	// The creation envelope contains a one-time secret; its validator tracks the
+	// persistent public resource so it can be reused by a later conditional PUT.
+	h.writeEntity(w, r, http.StatusCreated, key.VirtualKey, key)
 }
 
 func (h *VirtualKeyHTTPHandler) listVirtualKeys(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +72,7 @@ func (h *VirtualKeyHTTPHandler) getVirtualKey(w http.ResponseWriter, r *http.Req
 		h.writeError(w, r, err)
 		return
 	}
-	platform.JSON(w, http.StatusOK, key)
+	h.writeEntity(w, r, http.StatusOK, key, key)
 }
 
 func (h *VirtualKeyHTTPHandler) updateVirtualKey(w http.ResponseWriter, r *http.Request) {
@@ -78,16 +80,16 @@ func (h *VirtualKeyHTTPHandler) updateVirtualKey(w http.ResponseWriter, r *http.
 	if !h.decode(w, r, &input) {
 		return
 	}
-	key, err := h.service.UpdateVirtualKey(r.Context(), r.PathValue("id"), input)
+	key, err := h.service.updateVirtualKey(r.Context(), r.PathValue("id"), input, requestIfMatch(r))
 	if err != nil {
 		h.writeError(w, r, err)
 		return
 	}
-	platform.JSON(w, http.StatusOK, key)
+	h.writeEntity(w, r, http.StatusOK, key, key)
 }
 
 func (h *VirtualKeyHTTPHandler) deleteVirtualKey(w http.ResponseWriter, r *http.Request) {
-	if err := h.service.DeleteVirtualKey(r.Context(), r.PathValue("id")); err != nil {
+	if err := h.service.deleteVirtualKey(r.Context(), r.PathValue("id"), requestIfMatch(r)); err != nil {
 		h.writeError(w, r, err)
 		return
 	}

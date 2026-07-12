@@ -15,6 +15,51 @@ The services have independent Kubernetes Services and do not mirror each
 other's routes. The default local port forwards in the getting-started guide use
 `8081` for users/providers and `8082` for virtual keys.
 
+## Administrative WebUI
+
+`gwai-admin-webui` is an HTML backend-for-frontend over these APIs, not a third
+owner of lifecycle data. Its route groups are `/users`, `/providers` and
+`/virtual-keys`; the dashboard is `/`. It sends user/provider commands to
+`gwai-control-plane` and key commands to
+`gwai-virtual-key-control-plane` through Dapr service invocation. API clients
+can continue to use the JSON interfaces above directly.
+
+The browser authenticates at `/login` using the existing admin token. A signed,
+short-lived challenge keyed independently from that credential avoids
+allocating an anonymous server-side session. On success the backend creates an
+opaque, expiring session cookie and keeps the control-plane bearer credential
+server-side. `/logout` invalidates that session. Unauthenticated pages do not
+disclose administrative data and direct browser calls to the two JSON APIs are
+unnecessary.
+
+Every state-changing HTML form requires a CSRF token bound to the session. Key
+creation also consumes a single-use operation token, so retrying the same form
+does not create another credential. Administrative responses use
+`Cache-Control: no-store`; the plaintext key from `POST /v1/virtual-keys` is
+rendered directly in that response and is not retained or persisted by the
+WebUI. Browser forms present API validation and conflict details without
+logging credentials or secrets.
+
+Successful `POST`, item `GET` and `PUT` responses include a strong `ETag` for
+the returned resource. A `PUT` or `DELETE` may send it verbatim as `If-Match`;
+a stale or weak validator returns `409 Conflict`, while malformed syntax,
+including an explicitly empty header, returns `400 Bad Request`. Omitting
+`If-Match` preserves the unconditional API contract for existing clients. The
+WebUI always uses the conditional form for edits, status changes and deletion,
+preventing a stale confirmation from silently changing or removing newer data.
+For virtual-key creation, the validator identifies the nested `virtual_key`,
+not the one-time-secret envelope.
+
+If delivery of a key-creation response fails after the request was sent, the
+outcome is inherently ambiguous because the secret is never recoverable. The
+WebUI does not offer an immediate retry in that case: it directs the operator
+to inspect the key list and delete any matching key before deliberately
+creating a replacement. All mutating BFF calls use unknown-length streaming
+bodies so Dapr does not automatically replay POST, PUT or DELETE operations;
+read-only calls remain retryable. A lost mutation response produces an
+"outcome unknown" page without a repeat action, requiring the operator to
+reload and inspect current state first.
+
 `PUT` is a complete replacement of editable fields. IDs and timestamps remain
 server-owned. Status is `active` or `disabled`. A user's monotonic `revision` is
 also server-owned and coordinates its authorization projection.

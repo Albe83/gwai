@@ -48,6 +48,30 @@
 {{- if or (le (int .Values.virtualKeyControlPlane.port) 0) (le (int64 .Values.virtualKeyControlPlane.maxBodyBytes) 0) }}
 {{- fail "virtualKeyControlPlane port and maxBodyBytes must be positive" }}
 {{- end }}
+{{- if not .Values.images.adminWebUI.repository }}
+{{- fail "images.adminWebUI.repository is required" }}
+{{- end }}
+{{- if ne (int .Values.adminWebUI.replicas) 1 }}
+{{- fail "adminWebUI.replicas must remain 1" }}
+{{- end }}
+{{- if or (le (int .Values.adminWebUI.port) 0) (gt (int .Values.adminWebUI.port) 65535) (le (int64 .Values.adminWebUI.maxBodyBytes) 0) (le (int .Values.adminWebUI.service.port) 0) (gt (int .Values.adminWebUI.service.port) 65535) }}
+{{- fail "adminWebUI ports must be between 1 and 65535 and maxBodyBytes must be positive" }}
+{{- end }}
+{{- if ne .Values.adminWebUI.service.type "ClusterIP" }}
+{{- fail "adminWebUI.service.type must remain ClusterIP; use an authenticated TLS ingress for external exposure" }}
+{{- end }}
+{{- if or (lt (int .Values.adminWebUI.sessionTTLSeconds) 300) (gt (int .Values.adminWebUI.sessionTTLSeconds) 86400) }}
+{{- fail "adminWebUI.sessionTTLSeconds must be between 300 and 86400" }}
+{{- end }}
+{{- if or (lt (int .Values.adminWebUI.requestTimeoutSeconds) 1) (gt (int .Values.adminWebUI.requestTimeoutSeconds) 120) }}
+{{- fail "adminWebUI.requestTimeoutSeconds must be between 1 and 120" }}
+{{- end }}
+{{- if lt (int .Values.adminWebUI.terminationGracePeriodSeconds) (add (int .Values.adminWebUI.requestTimeoutSeconds) 10) }}
+{{- fail "adminWebUI.terminationGracePeriodSeconds must be at least requestTimeoutSeconds + 10" }}
+{{- end }}
+{{- if not (kindIs "bool" .Values.adminWebUI.secureCookies) }}
+{{- fail "adminWebUI.secureCookies must be a boolean" }}
+{{- end }}
 {{- if eq (len .Values.gateways) 0 }}
 {{- fail "at least one gateways entry is required" }}
 {{- end }}
@@ -57,6 +81,7 @@
 {{- $appIDs := dict }}
 {{- $_ := set $appIDs (include "gwai.controlPlaneName" .) true }}
 {{- $_ := set $appIDs (include "gwai.virtualKeyControlPlaneName" .) true }}
+{{- $_ := set $appIDs (include "gwai.adminWebUIName" .) true }}
 {{- $gatewayNames := dict }}
 {{- range $index, $gateway := .Values.gateways }}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $gateway.name) }}

@@ -9,6 +9,9 @@ IR translations rather than `C × P` direct converters.
 - The resource control plane owns users and provider configurations.
 - The virtual-key control plane independently owns key lifecycle and the
   authorization projection of key owners.
+- The administrative WebUI is a server-rendered backend-for-frontend (BFF). It
+  owns browser sessions and delegates lifecycle commands to the two control
+  planes; it owns no domain state.
 - A gateway owns exactly one public client protocol and translates wire ↔ IR.
 - An adapter owns exactly one provider protocol and translates IR ↔ wire.
 - `internal/dataplane.Dispatcher` is the only shared gateway execution path:
@@ -18,6 +21,7 @@ IR translations rather than `C × P` direct converters.
 
 | Service | Public responsibility | Runtime dependencies |
 | --- | --- | --- |
+| `gwai-admin-webui` | Browser UI and admin sessions | resource and virtual-key control-plane APIs |
 | `gwai-control-plane` | User and provider CRUD | private control state, provider state, subject sync/fence |
 | `gwai-virtual-key-control-plane` | Virtual-key CRUD | virtual-key state, provider state |
 | `gwai-openai-gateway` | OpenAI Chat Completions | virtual-key state, provider state, selected adapter app ID |
@@ -106,6 +110,50 @@ virtual-key service, while provider administration does not. Existing-key
 administration can continue with the resource service down because subjects and
 provider records are local to its dependencies.
 
+## Administrative WebUI
+
+The WebUI composes the split administrative APIs without changing their
+ownership. Its Go backend renders HTML and uses authenticated Dapr invocation
+to reach the resource control plane for users/providers and the virtual-key
+control plane for keys. The browser never receives the control-plane bearer
+token and never calls either API directly, so the deployment needs no browser
+CORS policy. The WebUI has no State Store scope and does not enter the inference
+path.
+
+An administrator presents the existing admin token only to the login form. A
+short-lived challenge signed with an independent process-local random key
+protects login without allocating anonymous
+server state. Successful authentication creates a short-lived, opaque
+server-side session identified by an `HttpOnly`, `SameSite=Strict` cookie, with
+`Secure` enabled for HTTPS deployments. Mutating forms require a per-session
+CSRF token; key creation also requires a single-use operation token. Responses
+containing administrative data or the one-time plaintext virtual key use
+`Cache-Control: no-store`; the key is rendered directly in the creation
+response, is not retained by the WebUI and is not placed in browser storage.
+Edit, status and delete-confirmation forms use strong ETags with `If-Match` to
+reject stale lifecycle actions. An ambiguous key-creation response does not
+produce an immediate replacement form; operators are directed to inspect and
+delete any possibly created key before retrying. Every mutating BFF invocation
+uses an unknown-length streaming body to suppress Dapr automatic retries;
+read-only calls remain retryable. Ambiguous mutation responses render no repeat
+action and direct the operator to reload current state. Shutdown grace exceeds
+the request deadline so in-flight lifecycle responses can complete during
+rollout.
+
+Dapr ACLs restrict the WebUI identity to the users, providers and virtual-key
+route families. Dapr 1.18 resolves a collection ACL node as a prefix before its
+item wildcard, so each collection rule carries the union of collection and
+item verbs for compatibility. The method-aware Go mux remains authoritative:
+unsupported collection/item verb combinations still return `405`, and the BFF
+client exposes only concrete lifecycle methods.
+
+Templates and static assets are compiled into the Go binary. There are no CDN
+requests and no JavaScript package-manager/runtime dependency. A strict Content
+Security Policy, frame denial, MIME sniffing protection and referrer policy
+reduce the browser attack surface. The default Kubernetes Service remains
+cluster-internal; production exposure requires a TLS-terminating ingress or
+equivalent trusted proxy.
+
 ## Intermediate representation
 
 IR `2026-07-12` represents:
@@ -155,6 +203,9 @@ does not temporarily overlap two writers.
 ## Security and availability
 
 - Admin APIs require a separate control-plane Bearer token.
+- The WebUI converts a successful admin-token login into an opaque, expiring
+  session; the bearer credential remains server-side and every mutation is
+  protected against CSRF.
 - Virtual keys are disclosed once and persisted as SHA-256 digests.
 - Provider records contain Secret references, never credential material.
 - Private control state is scoped only to `gwai-control-plane`; adapters never
