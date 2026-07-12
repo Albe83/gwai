@@ -1,6 +1,6 @@
 # ADR 0009: Model catalog and virtual-key references
 
-- Status: accepted
+- Status: accepted; amended by ADR 0010
 - Date: 2026-07-12
 
 ## Context
@@ -22,17 +22,19 @@ Reintroduce canonical Models in `gwai-provider-state`, owned by
 `GET, PUT, DELETE /v1/models/{id}`. A Model contains a server ID, globally
 unique immutable `alias`, `provider_id`, `upstream_model`, status, monotonic
 revision and timestamps. Provider assignment and upstream model are editable;
-creation and activation require an active Provider.
+the upstream value is optional and falls back to the alias. Creation and
+activation require an active Provider. ADR 0010 formalizes that fallback.
 
 Model does not duplicate an output-token default or cap. Those limits remain
 adapter-owned policy, so routing metadata and provider safety policy cannot
 drift into two competing sources of truth.
 
 Clients send the Model alias. Gateways resolve alias → Model → Provider, then
-put only `provider_id` and `upstream_model` in the provider-neutral IR and
-invoke the Provider's `adapter_app_id`. Adapters continue to resolve and verify
-only their Provider. No gateway imports a provider protocol or addresses a
-hard-coded adapter.
+put only `provider_id` and the effective upstream name (override or alias) in
+the provider-neutral IR and invoke the Provider's `adapter_app_id`. As amended
+by ADR 0010, adapters resolve and verify their Provider by their own app ID and
+take connection settings only from their deployment. No gateway imports a
+provider protocol or addresses a hard-coded adapter.
 
 Replace virtual-key string allowlists with a required, non-empty `model_ids`
 array. The virtual-key service validates each ID against its synchronized Model

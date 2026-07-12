@@ -1,6 +1,6 @@
 # ADR 0005: Provider-specific Dapr routing and direct runtime state reads
 
-- Status: amended by ADR 0007 and superseded in part by ADR 0009
+- Status: amended by ADR 0007; superseded in part by ADR 0009 and ADR 0010
 - Date: 2026-07-11
 - Updated: 2026-07-12
 
@@ -20,6 +20,9 @@ provider account. The adapter reads its configured provider by slug and verifies
 that both provider ID and app ID match the IR before contacting the upstream.
 
 ADR 0009 later restores a Model catalog and Model-ID virtual-key references.
+ADR 0010 later replaces adapter lookup by configured Provider slug with lookup
+by the adapter's own Dapr app ID and moves all upstream connection settings to
+the adapter deployment.
 Provider adapters still own default and maximum output-token policy when the IR
 omits or supplies the optional value.
 

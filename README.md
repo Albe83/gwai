@@ -40,7 +40,7 @@ flowchart LR
     Gateways -->|read key + user/model subjects| KS
     Gateways -->|resolve model alias + provider| PS
     Gateways -->|Dapr invocation: IR 2026-07-12| Adapters[Provider-specific adapter instance]
-    Adapters -->|read own provider| PS
+    Adapters -->|verify Provider binding by own app ID| PS
     Adapters -->|Dapr Secret Store| Secrets[Kubernetes Secret]
     Adapters --> Providers[OpenAI / Anthropic / Gemini APIs]
 ```
@@ -54,6 +54,14 @@ the model/provider routing catalog and key authorization records in separate
 Valkey logical databases. The contract is
 [`2026-07-12.schema.json`](api/ir/2026-07-12.schema.json).
 
+The cluster administrator deploys each adapter with its Dapr app ID, upstream
+base URL/API version and Secret Store reference. A GWAI administrator then
+registers only the matching Provider identity (`slug`, `name`, `kind`,
+`adapter_app_id`, `status`) and maps a public Model alias to that Provider. A
+Model can optionally override the upstream model name; when it does not, the
+public alias is sent upstream. Every gateway restores the requested public
+alias in its response, so a masked provider model name is never exposed.
+
 ## What works
 
 - Separate CRUD services for users/models/providers and virtual keys.
@@ -66,7 +74,8 @@ Valkey logical databases. The contract is
 - Revisioned user/model projections, atomic deletion fencing and fail-closed
   gateway authorization across the complete User → VKey → Model → Provider chain.
 - Direct data-plane reads and provider-specific Dapr service invocation.
-- Per-provider identities, Secret scopes, Dapr mTLS/tokens/ACLs and retries.
+- Deployment-owned per-provider identities, endpoints, Secret scopes, Dapr
+  mTLS/tokens/ACLs and retries.
 - Generic Helm lists for any mix of the four gateways and provider adapters.
 - Non-root distroless services and persistent Valkey state for local k3s.
 - Race-tested translators and an E2E path that sends all four client protocols
@@ -90,10 +99,12 @@ beyond loopback or a trusted network. See
 [getting started](docs/getting-started.md) for the complete login and
 provisioning flow.
 
-The default chart exposes all four gateways and deploys one Anthropic adapter
-with provider slug `anthropic` and Dapr app ID `gwai-anthropic`. Follow
-[getting started](docs/getting-started.md) for real credentials and additional
-providers.
+The default chart exposes all four gateways and deploys all four implemented
+adapters with Dapr app IDs `gwai-anthropic`, `gwai-openai-chat`,
+`gwai-openai-responses` and `gwai-gemini`. Each has its own deployment-owned
+upstream connection and Secret scope. Register the corresponding Providers
+before creating Models. Follow [getting started](docs/getting-started.md) for
+credentials and provisioning.
 
 ## Development
 

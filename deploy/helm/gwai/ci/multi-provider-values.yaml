@@ -1,7 +1,6 @@
 providerAdapters:
   - name: team-a
     kind: anthropic
-    providerSlug: anthropic-team-a
     appID: gwai-anthropic-team-a
     image: {repository: gwai-anthropic-adapter}
     replicas: 2
@@ -10,40 +9,49 @@ providerAdapters:
     providerTimeout: 5m
     defaultMaxOutputTokens: 4096
     maxOutputTokens: 8192
-    secretNames: [anthropic-team-a]
+    upstream:
+      baseURL: https://api.anthropic.com
+      apiVersion: 2023-06-01
+      secretRef: {store: kubernetes, name: anthropic-team-a, key: api-key, namespace: ""}
     resources: &adapterResources
       requests: {cpu: 50m, memory: 64Mi}
       limits: {cpu: "1", memory: 512Mi}
   - name: team-b
     kind: openai-chat
-    providerSlug: openai-chat-team-b
     appID: gwai-openai-chat-team-b
     image: {repository: gwai-openai-chat-adapter}
     replicas: 1
     port: 8080
     maxBodyBytes: 10485760
     providerTimeout: 5m
-    secretNames: [openai-team-b]
+    upstream:
+      baseURL: https://api.openai.com
+      apiVersion: v1
+      secretRef: {store: kubernetes, name: openai-team-b, key: api-key, namespace: ""}
     resources: *adapterResources
   - name: team-c
     kind: openai-responses
-    providerSlug: openai-responses-team-c
     appID: gwai-openai-responses-team-c
     image: {repository: gwai-openai-responses-adapter}
     replicas: 1
     port: 8080
     maxBodyBytes: 10485760
     providerTimeout: 5m
-    secretNames: [openai-team-c]
+    upstream:
+      baseURL: https://api.openai.com
+      apiVersion: v1
+      secretRef: {store: kubernetes, name: openai-team-c, key: api-key, namespace: ""}
     resources: *adapterResources
   - name: team-d
     kind: gemini
-    providerSlug: gemini-team-d
     appID: gwai-gemini-team-d
     image: {repository: gwai-gemini-adapter}
     replicas: 1
     port: 8080
     maxBodyBytes: 10485760
     providerTimeout: 5m
-    secretNames: [gemini-team-d]
+    upstream:
+      baseURL: https://generativelanguage.googleapis.com
+      apiVersion: v1beta
+      secretRef: {store: kubernetes, name: gemini-team-d, key: api-key, namespace: ""}
     resources: *adapterResources

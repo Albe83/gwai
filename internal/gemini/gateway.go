@@ -117,7 +117,7 @@ func (h *GatewayHTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.writeRuntimeError(w, r, err)
 		return
 	}
-	providerResponse, err := FromIRResponse(response)
+	providerResponse, err := FromIRResponse(response, model)
 	if err != nil {
 		h.writeRuntimeError(w, r, err)
 		return

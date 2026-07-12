@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Albe83/gwai/internal/adapterconfig"
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/openairesponses"
@@ -23,11 +24,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	providerSlug, err := platform.RequiredEnv("GWAI_PROVIDER_SLUG")
-	if err != nil {
-		return err
-	}
-	appID, err := platform.RequiredEnv("GWAI_ADAPTER_APP_ID")
+	runtimeConfig, err := adapterconfig.Load()
 	if err != nil {
 		return err
 	}
@@ -45,7 +42,7 @@ func run() error {
 	runtime := controlplane.NewProviderRuntime(providers)
 	secretStore := daprhttp.NewSecretStore(daprClient)
 	handler := openairesponses.NewAdapterHTTPHandler(runtime, secretStore, openairesponses.NewUpstreamClient(requestTimeout), openairesponses.AdapterConfig{
-		ProviderSlug: providerSlug, AppID: appID, MaxBody: maxBody, AppToken: os.Getenv("APP_API_TOKEN"), MaxOutputTokens: int(maxOutputTokens),
+		Runtime: runtimeConfig, MaxBody: maxBody, AppToken: os.Getenv("APP_API_TOKEN"), MaxOutputTokens: int(maxOutputTokens),
 	}, logger)
 
 	server := &http.Server{

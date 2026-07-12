@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Albe83/gwai/internal/adapterconfig"
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/ir"
@@ -19,7 +20,7 @@ import (
 )
 
 type ProviderResolver interface {
-	ResolveProviderBySlug(context.Context, string) (controlplane.Provider, error)
+	ResolveProviderByAdapterAppID(context.Context, string) (controlplane.Provider, error)
 }
 
 type SecretResolver interface {
@@ -37,8 +38,7 @@ type HTTPHandler struct {
 }
 
 type Config struct {
-	ProviderSlug           string
-	AppID                  string
+	Runtime                adapterconfig.Config
 	MaxBody                int64
 	AppToken               string
 	DefaultMaxOutputTokens int
@@ -91,7 +91,7 @@ func (h *HTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusBadRequest, "Invalid IR request", err.Error(), nil)
 		return
 	}
-	provider, err := h.providers.ResolveProviderBySlug(r.Context(), h.config.ProviderSlug)
+	provider, err := h.providers.ResolveProviderByAdapterAppID(r.Context(), h.config.Runtime.AppID)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, controlplane.ErrNotFound) || errors.Is(err, controlplane.ErrForbidden) {
@@ -104,15 +104,11 @@ func (h *HTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid provider", "this adapter only accepts Anthropic providers", nil)
 		return
 	}
-	if provider.ID != internalRequest.Route.ProviderID || provider.AdapterAppID != h.config.AppID {
+	if provider.ID != internalRequest.Route.ProviderID || provider.AdapterAppID != h.config.Runtime.AppID {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid route", "the request is not addressed to this provider adapter", nil)
 		return
 	}
-	if strings.TrimSpace(provider.APIVersion) == "" {
-		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid provider", "the Anthropic API version is not configured", nil)
-		return
-	}
-	apiKey, err := h.secrets.Get(r.Context(), provider.SecretRef)
+	apiKey, err := h.secrets.Get(r.Context(), h.config.Runtime.SecretRef)
 	if err != nil {
 		h.fail(w, r, http.StatusBadGateway, "Provider credential unavailable", "the provider credential could not be loaded", err)
 		return
@@ -131,7 +127,7 @@ func (h *HTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusInternalServerError, "Encoding failed", "the provider request could not be encoded", err)
 		return
 	}
-	upstreamRequest, err := http.NewRequestWithContext(r.Context(), http.MethodPost, strings.TrimRight(provider.BaseURL, "/")+"/v1/messages", bytes.NewReader(payload))
+	upstreamRequest, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.config.Runtime.BaseURL+"/v1/messages", bytes.NewReader(payload))
 	if err != nil {
 		h.fail(w, r, http.StatusInternalServerError, "Request construction failed", "the provider request could not be created", err)
 		return
@@ -139,7 +135,7 @@ func (h *HTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 	upstreamRequest.Header.Set("Content-Type", "application/json")
 	upstreamRequest.Header.Set("Accept", "application/json")
 	upstreamRequest.Header.Set("x-api-key", apiKey)
-	upstreamRequest.Header.Set("anthropic-version", provider.APIVersion)
+	upstreamRequest.Header.Set("anthropic-version", h.config.Runtime.APIVersion)
 	upstreamRequest.Header.Set("User-Agent", "gwai-anthropic-adapter/0.2")
 	if requestID := platform.RequestID(r.Context()); requestID != "" {
 		upstreamRequest.Header.Set("X-Request-ID", requestID)

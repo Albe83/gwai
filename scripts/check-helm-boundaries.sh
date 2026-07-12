@@ -6,7 +6,8 @@ HELM_BIN=${HELM:-helm}
 render=$(mktemp)
 long_render=$(mktemp)
 route_render=$(mktemp)
-trap 'rm -f "$render" "$long_render" "$route_render"' EXIT
+secret_render=$(mktemp)
+trap 'rm -f "$render" "$long_render" "$route_render" "$secret_render"' EXIT
 
 "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" >"$render"
 
@@ -77,9 +78,26 @@ grep -q '^  - gwai-virtual-key-control-plane$' <<<"$keys"
 
 adapter=$(deployment_doc gwai-anthropic-primary)
 grep -q 'GWAI_PROVIDER_STATE_STORE' <<<"$adapter"
+grep -q 'GWAI_ADAPTER_APP_ID' <<<"$adapter"
+grep -q 'GWAI_PROVIDER_BASE_URL' <<<"$adapter"
+grep -q 'GWAI_PROVIDER_API_VERSION' <<<"$adapter"
+grep -q 'GWAI_PROVIDER_SECRET_STORE' <<<"$adapter"
+grep -q 'GWAI_PROVIDER_SECRET_NAME' <<<"$adapter"
+grep -q 'GWAI_PROVIDER_SECRET_KEY' <<<"$adapter"
+! grep -q 'GWAI_PROVIDER_SLUG' <<<"$adapter"
 ! grep -Eq 'GWAI_VIRTUAL_KEY_STATE_STORE|GWAI_CONTROL_STATE_STORE' <<<"$adapter"
 grep -q 'name: gwai-app-api-token' <<<"$adapter"
 ! grep -q 'name: gwai-virtual-key-app-api-token' <<<"$adapter"
+
+"$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --namespace gwai \
+  --set-json 'providerAdapters=[{"name":"primary","kind":"anthropic","appID":"gwai-anthropic","image":{"repository":"gwai-anthropic-adapter"},"replicas":1,"port":8080,"maxBodyBytes":10485760,"providerTimeout":"5m","defaultMaxOutputTokens":4096,"maxOutputTokens":0,"upstream":{"baseURL":"https://api.anthropic.com","apiVersion":"2023-06-01","secretRef":{"store":"kubernetes","name":"gwai-anthropic","key":"api-key","namespace":"provider-secrets"}},"resources":{}}]' \
+  >"$secret_render"
+secret_role=$(awk 'BEGIN { RS="---" } /kind: Role/ && /name: gwai-anthropic-primary-secrets/ { print }' "$secret_render")
+secret_binding=$(awk 'BEGIN { RS="---" } /kind: RoleBinding/ && /name: gwai-anthropic-primary-secrets/ { print }' "$secret_render")
+grep -q '^  namespace: "provider-secrets"$' <<<"$secret_role"
+grep -q '^  namespace: "provider-secrets"$' <<<"$secret_binding"
+grep -A3 '^subjects:' <<<"$secret_binding" | grep -q '^    namespace: gwai$'
 
 gateway=$(deployment_doc gwai-openai-gateway)
 grep -q 'GWAI_PROVIDER_STATE_STORE' <<<"$gateway"
@@ -217,6 +235,21 @@ fi
 if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
   --set-string 'providerAdapters[0].appID=gwai-admin-webui' >/dev/null 2>&1; then
   echo "admin WebUI Dapr app ID was accepted for an adapter" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set-string 'providerAdapters[0].upstream.baseURL=' >/dev/null 2>&1; then
+  echo "empty adapter upstream base URL was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set-string 'providerAdapters[0].upstream.secretRef.name=' >/dev/null 2>&1; then
+  echo "empty adapter upstream secret name was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set-string 'providerAdapters[0].upstream.secretRef.namespace=INVALID_NAMESPACE' >/dev/null 2>&1; then
+  echo "invalid adapter Secret namespace was accepted" >&2
   exit 1
 fi
 if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \

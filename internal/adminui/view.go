@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Albe83/gwai/internal/controlplane"
-	"github.com/Albe83/gwai/internal/daprhttp"
 )
 
 //go:embed templates/*.html assets/*
@@ -179,39 +178,24 @@ func (f userForm) input() controlplane.UserInput {
 }
 
 type providerForm struct {
-	Slug            string
-	Name            string
-	Kind            string
-	BaseURL         string
-	APIVersion      string
-	AdapterAppID    string
-	SecretStore     string
-	SecretName      string
-	SecretKey       string
-	SecretNamespace string
-	Status          string
+	Slug         string
+	Name         string
+	Kind         string
+	AdapterAppID string
+	Status       string
 }
 
 func providerFormFromModel(provider controlplane.Provider) providerForm {
 	return providerForm{
 		Slug: provider.Slug, Name: provider.Name, Kind: provider.Kind,
-		BaseURL: provider.BaseURL, APIVersion: provider.APIVersion,
-		AdapterAppID: provider.AdapterAppID,
-		SecretStore:  provider.SecretRef.Store, SecretName: provider.SecretRef.Name,
-		SecretKey: provider.SecretRef.Key, SecretNamespace: provider.SecretRef.Namespace,
-		Status: string(provider.Status),
+		AdapterAppID: provider.AdapterAppID, Status: string(provider.Status),
 	}
 }
 
 func (f providerForm) input() controlplane.ProviderInput {
 	return controlplane.ProviderInput{
-		Slug: f.Slug, Name: f.Name, Kind: f.Kind, BaseURL: f.BaseURL,
-		APIVersion: f.APIVersion, AdapterAppID: f.AdapterAppID,
-		SecretRef: daprhttp.SecretRef{
-			Store: f.SecretStore, Name: f.SecretName,
-			Key: f.SecretKey, Namespace: f.SecretNamespace,
-		},
-		Status: controlplane.Status(f.Status),
+		Slug: f.Slug, Name: f.Name, Kind: f.Kind,
+		AdapterAppID: f.AdapterAppID, Status: controlplane.Status(f.Status),
 	}
 }
 

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/state"
 )
 
@@ -214,8 +213,8 @@ func TestPublicResourceETagsAndIfMatchAcrossAllDomains(t *testing.T) {
 
 	providerInput := ProviderInput{
 		Slug: "anthropic", Name: "Anthropic", Kind: ProviderKindAnthropic,
-		AdapterAppID: "gwai-anthropic", SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic", Key: "api-key"},
-		Status: StatusActive,
+		AdapterAppID: "gwai-anthropic",
+		Status:       StatusActive,
 	}
 	createdProviderResponse := controlRequest(resources, http.MethodPost, "/v1/providers", "admin-token", providerInput)
 	if createdProviderResponse.Code != http.StatusCreated {

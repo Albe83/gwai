@@ -373,8 +373,24 @@ func TestGatewayRuntimeFailsClosedWithoutActiveSubject(t *testing.T) {
 	if _, err := runtime.Authorize(ctx, token, model.Alias); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("missing subject must fail closed, got %v", err)
 	}
-	resolved, err := NewProviderRuntime(providers).ResolveProviderBySlug(ctx, provider.Slug)
+	byAppID, err := providers.GetProviderByAdapterAppID(ctx, provider.AdapterAppID)
+	if err != nil || byAppID.ID != provider.ID {
+		t.Fatalf("provider repository did not resolve app ID: provider=%+v err=%v", byAppID, err)
+	}
+	resolved, err := NewProviderRuntime(providers).ResolveProviderByAdapterAppID(ctx, provider.AdapterAppID)
 	if err != nil || resolved.ID != provider.ID {
-		t.Fatalf("provider runtime did not resolve provider: provider=%+v err=%v", resolved, err)
+		t.Fatalf("provider runtime did not resolve app ID: provider=%+v err=%v", resolved, err)
+	}
+	if _, err := NewProviderRuntime(providers).ResolveProviderByAdapterAppID(ctx, "missing-adapter"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing adapter app ID returned %v", err)
+	}
+	disabled := provider
+	disabled.Status = StatusDisabled
+	disabled.UpdatedAt = disabled.UpdatedAt.Add(time.Minute)
+	if err := providers.ReplaceProvider(ctx, provider, disabled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewProviderRuntime(providers).ResolveProviderByAdapterAppID(ctx, provider.AdapterAppID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("disabled provider resolved by app ID with %v", err)
 	}
 }

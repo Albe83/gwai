@@ -58,10 +58,20 @@ spec:
               value: {{ $adapter.port | quote }}
             - name: GWAI_PROVIDER_STATE_STORE
               value: {{ $root.Values.dapr.stateStores.providers.name | quote }}
-            - name: GWAI_PROVIDER_SLUG
-              value: {{ $adapter.providerSlug | quote }}
             - name: GWAI_ADAPTER_APP_ID
               value: {{ $adapter.appID | quote }}
+            - name: GWAI_PROVIDER_BASE_URL
+              value: {{ $adapter.upstream.baseURL | quote }}
+            - name: GWAI_PROVIDER_API_VERSION
+              value: {{ $adapter.upstream.apiVersion | quote }}
+            - name: GWAI_PROVIDER_SECRET_STORE
+              value: {{ $adapter.upstream.secretRef.store | quote }}
+            - name: GWAI_PROVIDER_SECRET_NAME
+              value: {{ $adapter.upstream.secretRef.name | quote }}
+            - name: GWAI_PROVIDER_SECRET_KEY
+              value: {{ $adapter.upstream.secretRef.key | quote }}
+            - name: GWAI_PROVIDER_SECRET_NAMESPACE
+              value: {{ default "" $adapter.upstream.secretRef.namespace | quote }}
             - name: GWAI_MAX_BODY_BYTES
               value: {{ int64 $adapter.maxBodyBytes | quote }}
             - name: GWAI_PROVIDER_TIMEOUT

@@ -172,11 +172,11 @@ gateways:
     resources: *gatewayResources
 
 # Each provider account gets its own Dapr identity and adapter workload. The
-# control-plane provider record must use the same providerSlug, kind and appID.
+# cluster administrator owns its upstream connection and credential reference;
+# the GWAI Provider record binds to it only through kind and appID.
 providerAdapters:
   - name: primary
     kind: anthropic
-    providerSlug: anthropic
     appID: gwai-anthropic
     image:
       repository: gwai-anthropic-adapter
@@ -187,16 +187,80 @@ providerAdapters:
     defaultMaxOutputTokens: 4096
     # Adapter-specific optional limits. Zero delegates the upper bound.
     maxOutputTokens: 0
-    # Kubernetes RBAC and the Dapr secret scope are restricted per instance.
-    secretNames:
-      - gwai-anthropic
-    resources:
+    upstream:
+      baseURL: https://api.anthropic.com
+      apiVersion: 2023-06-01
+      # Kubernetes RBAC and the Dapr secret scope are derived from this
+      # deployment-owned reference. Credential material remains outside Helm.
+      secretRef:
+        store: kubernetes
+        name: gwai-anthropic
+        key: api-key
+        namespace: ""
+    resources: &adapterResources
       requests:
         cpu: 50m
         memory: 64Mi
       limits:
         cpu: "1"
         memory: 512Mi
+  - name: primary-chat
+    kind: openai-chat
+    appID: gwai-openai-chat
+    image:
+      repository: gwai-openai-chat-adapter
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    providerTimeout: 5m
+    upstream:
+      baseURL: https://api.openai.com
+      apiVersion: v1
+      secretRef:
+        store: kubernetes
+        name: gwai-openai-chat
+        key: api-key
+        namespace: ""
+    resources: *adapterResources
+  - name: primary-responses
+    kind: openai-responses
+    appID: gwai-openai-responses
+    image:
+      repository: gwai-openai-responses-adapter
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    providerTimeout: 5m
+    maxOutputTokens: 0
+    upstream:
+      baseURL: https://api.openai.com
+      apiVersion: v1
+      secretRef:
+        store: kubernetes
+        name: gwai-openai-responses
+        key: api-key
+        namespace: ""
+    resources: *adapterResources
+  - name: primary-gemini
+    kind: gemini
+    appID: gwai-gemini
+    image:
+      repository: gwai-gemini-adapter
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    providerTimeout: 5m
+    defaultMaxOutputTokens: 4096
+    maxOutputTokens: 0
+    upstream:
+      baseURL: https://generativelanguage.googleapis.com
+      apiVersion: v1beta
+      secretRef:
+        store: kubernetes
+        name: gwai-gemini
+        key: api-key
+        namespace: ""
+    resources: *adapterResources
 
 valkey:
   enabled: true

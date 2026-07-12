@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Albe83/gwai/internal/adapterconfig"
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/ir"
@@ -78,7 +79,7 @@ func TestGatewayGenerateContentDispatchesThroughIR(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.ResponseID != "resp_1" || *response.Candidates[0].Content.Parts[0].Text != "hello" {
+	if response.ResponseID != "resp_1" || response.ModelVersion != "team/gemini-3-flash" || *response.Candidates[0].Content.Parts[0].Text != "hello" {
 		t.Fatalf("unexpected response: %#v", response)
 	}
 }
@@ -106,15 +107,23 @@ func TestGatewayRejectsStreamingAndUnknownFields(t *testing.T) {
 	}
 }
 
-type fakeProviderResolver struct{ provider controlplane.Provider }
+type fakeProviderResolver struct {
+	provider controlplane.Provider
+	appID    string
+}
 
-func (f fakeProviderResolver) ResolveProviderBySlug(_ context.Context, _ string) (controlplane.Provider, error) {
+func (f *fakeProviderResolver) ResolveProviderByAdapterAppID(_ context.Context, appID string) (controlplane.Provider, error) {
+	f.appID = appID
 	return f.provider, nil
 }
 
-type fakeSecretResolver struct{ value string }
+type fakeSecretResolver struct {
+	value string
+	ref   daprhttp.SecretRef
+}
 
-func (f fakeSecretResolver) Get(_ context.Context, _ daprhttp.SecretRef) (string, error) {
+func (f *fakeSecretResolver) Get(_ context.Context, ref daprhttp.SecretRef) (string, error) {
+	f.ref = ref
 	return f.value, nil
 }
 
@@ -135,11 +144,17 @@ func TestAdapterCallsGeminiAndPreservesThoughtSignature(t *testing.T) {
 	}))
 	defer upstream.Close()
 	provider := controlplane.Provider{
-		ID: "prv_g", Slug: "team", Kind: controlplane.ProviderKindGemini, BaseURL: upstream.URL,
-		APIVersion: "v1beta", AdapterAppID: "gemini-team", Status: controlplane.StatusActive,
+		ID: "prv_g", Slug: "team", Kind: controlplane.ProviderKindGemini,
+		AdapterAppID: "gemini-team", Status: controlplane.StatusActive,
 	}
-	handler := NewAdapterHTTPHandler(fakeProviderResolver{provider}, fakeSecretResolver{"provider-key"}, upstream.Client(), AdapterConfig{
-		ProviderSlug: "team", AppID: "gemini-team", MaxBody: 1 << 20, DefaultMaxOutputTokens: 256,
+	secretRef := daprhttp.SecretRef{Store: "secrets", Name: "gemini", Key: "api-key"}
+	providers := &fakeProviderResolver{provider: provider}
+	secrets := &fakeSecretResolver{value: "provider-key"}
+	handler := NewAdapterHTTPHandler(providers, secrets, upstream.Client(), AdapterConfig{
+		Runtime: adapterconfig.Config{
+			AppID: "gemini-team", BaseURL: upstream.URL, APIVersion: "v1beta", SecretRef: secretRef,
+		},
+		MaxBody: 1 << 20, DefaultMaxOutputTokens: 256,
 	}, testLogger())
 	internalRequest := ir.Request{
 		Version: ir.Version, ID: "req_adapter", Route: ir.Route{ProviderID: "prv_g", UpstreamModel: "gemini-3-flash"},
@@ -175,12 +190,15 @@ func TestAdapterCallsGeminiAndPreservesThoughtSignature(t *testing.T) {
 	if response.ProviderResponseID != "provider-response" || response.Content[0].ToolCall.Signature != "provider-signature" || response.FinishReason != ir.FinishToolCalls {
 		t.Fatalf("unexpected IR response: %#v", response)
 	}
+	if providers.appID != "gemini-team" || secrets.ref != secretRef {
+		t.Fatalf("unexpected runtime resolution: appID=%q ref=%+v", providers.appID, secrets.ref)
+	}
 }
 
 func TestAdapterRejectsRouteForAnotherInstance(t *testing.T) {
 	provider := controlplane.Provider{ID: "prv_g", Kind: controlplane.ProviderKindGemini, AdapterAppID: "other", Status: controlplane.StatusActive}
-	handler := NewAdapterHTTPHandler(fakeProviderResolver{provider}, fakeSecretResolver{}, nil, AdapterConfig{
-		ProviderSlug: "team", AppID: "gemini-team", MaxBody: 1 << 20,
+	handler := NewAdapterHTTPHandler(&fakeProviderResolver{provider: provider}, &fakeSecretResolver{}, nil, AdapterConfig{
+		Runtime: adapterconfig.Config{AppID: "gemini-team"}, MaxBody: 1 << 20,
 	}, testLogger())
 	requestBody, err := json.Marshal(ir.Request{
 		Version: ir.Version, ID: "req", Route: ir.Route{ProviderID: "prv_g", UpstreamModel: "gemini"},

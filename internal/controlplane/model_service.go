@@ -59,8 +59,8 @@ func (s *ResourceService) normalizeModelInput(ctx context.Context, input ModelIn
 		}
 		return input, err
 	}
-	if input.UpstreamModel == "" || len(input.UpstreamModel) > 300 {
-		return input, &ValidationError{Field: "upstream_model", Message: "must contain between 1 and 300 bytes"}
+	if len(input.UpstreamModel) > 300 {
+		return input, &ValidationError{Field: "upstream_model", Message: "must not exceed 300 bytes"}
 	}
 	if err := validateStatus(input.Status); err != nil {
 		return input, err

@@ -41,7 +41,7 @@ func TestDaprAPIUsesExplicitTargetsRoutesAndHTTPMethods(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"id":"usr_new","name":"Ada","email":"ada@example.com","status":"active","revision":1,"created_at":"2026-07-12T00:00:00Z","updated_at":"2026-07-12T00:00:00Z"}`))
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/v1/providers/"):
-			_, _ = w.Write([]byte(`{"id":"prv_one","slug":"anthropic","name":"Primary","kind":"anthropic","base_url":"https://api.anthropic.com","api_version":"2023-06-01","adapter_app_id":"gwai-anthropic","secret_ref":{"store":"kubernetes","name":"anthropic"},"status":"disabled","created_at":"2026-07-12T00:00:00Z","updated_at":"2026-07-12T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"id":"prv_one","slug":"anthropic","name":"Primary","kind":"anthropic","adapter_app_id":"gwai-anthropic","status":"disabled","created_at":"2026-07-12T00:00:00Z","updated_at":"2026-07-12T00:00:00Z"}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v1/models"):
 			_, _ = w.Write([]byte(`{"data":[]}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v1/models"):
@@ -74,8 +74,7 @@ func TestDaprAPIUsesExplicitTargetsRoutesAndHTTPMethods(t *testing.T) {
 	}
 	providerInput := controlplane.ProviderInput{
 		Slug: "anthropic", Name: "Primary", Kind: controlplane.ProviderKindAnthropic,
-		BaseURL: "https://api.anthropic.com", APIVersion: "2023-06-01", AdapterAppID: "gwai-anthropic",
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic"}, Status: controlplane.StatusDisabled,
+		AdapterAppID: "gwai-anthropic", Status: controlplane.StatusDisabled,
 	}
 	updated, err := api.UpdateProvider(ctx, "prv_one", providerInput, `"provider-version"`)
 	if err != nil {
@@ -130,6 +129,16 @@ func TestDaprAPIUsesExplicitTargetsRoutesAndHTTPMethods(t *testing.T) {
 		}
 		if got.ifMatch != want.ifMatch {
 			t.Fatalf("request %d If-Match = %q", index, got.ifMatch)
+		}
+		if index == 2 {
+			if got.body["adapter_app_id"] != "gwai-anthropic" {
+				t.Fatalf("provider update body omitted adapter app ID: %+v", got.body)
+			}
+			for _, removed := range []string{"base_url", "api_version", "secret_ref"} {
+				if _, exists := got.body[removed]; exists {
+					t.Fatalf("provider update body retained removed field %q: %+v", removed, got.body)
+				}
+			}
 		}
 		if got.method != http.MethodGet {
 			if got.contentLength != -1 || !slices.Contains(got.transferEncoding, "chunked") {

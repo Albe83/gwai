@@ -35,10 +35,11 @@ func main() {
 			http.Error(w, `{"type":"error","error":{"type":"invalid_request_error","message":"invalid request"}}`, http.StatusBadRequest)
 			return
 		}
+		responseText := "gwai e2e ok (" + request.Model + ")"
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": "msg_gwai_e2e", "type": "message", "role": "assistant", "model": request.Model,
-			"content":     []map[string]string{{"type": "text", "text": "gwai e2e ok"}},
+			"content":     []map[string]string{{"type": "text", "text": responseText}},
 			"stop_reason": "end_turn", "stop_sequence": nil,
 			"usage": map[string]int{"input_tokens": 7, "output_tokens": 4},
 		})

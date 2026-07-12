@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Albe83/gwai/internal/adapterconfig"
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/ir"
@@ -18,7 +19,7 @@ import (
 
 type fixedProviderResolver struct {
 	provider controlplane.Provider
-	slug     string
+	appID    string
 }
 
 type fixedSecretResolver struct {
@@ -31,8 +32,8 @@ func (r *fixedSecretResolver) Get(_ context.Context, ref daprhttp.SecretRef) (st
 	return r.value, nil
 }
 
-func (r *fixedProviderResolver) ResolveProviderBySlug(_ context.Context, slug string) (controlplane.Provider, error) {
-	r.slug = slug
+func (r *fixedProviderResolver) ResolveProviderByAdapterAppID(_ context.Context, appID string) (controlplane.Provider, error) {
+	r.appID = appID
 	return r.provider, nil
 }
 
@@ -64,12 +65,14 @@ func TestHTTPHandlerCallsAnthropicWithOfficialAuthAndVersion(t *testing.T) {
 	secretRef := daprhttp.SecretRef{Store: "secrets", Name: "anthropic", Key: "api-key"}
 	resolver := &fixedProviderResolver{provider: controlplane.Provider{
 		ID: "prv_a", Slug: "team-a", Kind: controlplane.ProviderKindAnthropic,
-		BaseURL: upstream.URL, APIVersion: PublicAPIVersion, AdapterAppID: "anthropic-a", SecretRef: secretRef,
-		Status: controlplane.StatusActive,
+		AdapterAppID: "anthropic-a", Status: controlplane.StatusActive,
 	}}
 	secrets := &fixedSecretResolver{value: "anthropic-secret"}
 	handler := NewHTTPHandler(resolver, secrets, upstream.Client(), Config{
-		ProviderSlug: "team-a", AppID: "anthropic-a", MaxBody: 1 << 20, AppToken: "internal-token",
+		Runtime: adapterconfig.Config{
+			AppID: "anthropic-a", BaseURL: upstream.URL, APIVersion: PublicAPIVersion, SecretRef: secretRef,
+		},
+		MaxBody: 1 << 20, AppToken: "internal-token",
 		DefaultMaxOutputTokens: 4096,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	requestBody, err := json.Marshal(ir.Request{
@@ -91,8 +94,8 @@ func TestHTTPHandlerCallsAnthropicWithOfficialAuthAndVersion(t *testing.T) {
 	if providerRequest.Model != "claude-sonnet" || providerRequest.MaxTokens != 4096 || providerRequest.Messages[0].Content[0].Text != "hello" {
 		t.Fatalf("unexpected provider request: %+v", providerRequest)
 	}
-	if secrets.ref != secretRef {
-		t.Fatalf("unexpected secret reference: %+v", secrets.ref)
+	if resolver.appID != "anthropic-a" || secrets.ref != secretRef {
+		t.Fatalf("unexpected runtime resolution: appID=%q ref=%+v", resolver.appID, secrets.ref)
 	}
 	var response ir.Response
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
@@ -105,7 +108,7 @@ func TestHTTPHandlerCallsAnthropicWithOfficialAuthAndVersion(t *testing.T) {
 
 func TestHTTPHandlerRequiresAuthenticatedDaprInvocation(t *testing.T) {
 	handler := NewHTTPHandler(&fixedProviderResolver{}, nil, nil, Config{
-		ProviderSlug: "team-a", AppID: "anthropic-a", MaxBody: 1 << 20, AppToken: "internal-token", DefaultMaxOutputTokens: 1,
+		Runtime: adapterconfig.Config{AppID: "anthropic-a"}, MaxBody: 1 << 20, AppToken: "internal-token", DefaultMaxOutputTokens: 1,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	request := httptest.NewRequest(http.MethodPost, "/v1/generate", strings.NewReader(`{}`))
 	recorder := httptest.NewRecorder()
@@ -121,7 +124,7 @@ func TestHTTPHandlerRejectsRouteForAnotherProviderInstance(t *testing.T) {
 		Status: controlplane.StatusActive,
 	}}
 	handler := NewHTTPHandler(resolver, nil, nil, Config{
-		ProviderSlug: "team-a", AppID: "gwai-team-a", MaxBody: 1 << 20,
+		Runtime: adapterconfig.Config{AppID: "gwai-team-a"}, MaxBody: 1 << 20,
 		DefaultMaxOutputTokens: 4096,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	requestBody, err := json.Marshal(ir.Request{
@@ -138,7 +141,7 @@ func TestHTTPHandlerRejectsRouteForAnotherProviderInstance(t *testing.T) {
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected route isolation failure, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if resolver.slug != "team-a" {
-		t.Fatalf("adapter resolved unexpected provider slug %q", resolver.slug)
+	if resolver.appID != "gwai-team-a" {
+		t.Fatalf("adapter resolved unexpected provider app ID %q", resolver.appID)
 	}
 }
