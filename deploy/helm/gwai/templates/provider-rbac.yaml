@@ -1,12 +1,12 @@
 {{- $root := . -}}
-{{- range $index, $adapter := .Values.anthropicAdapters }}
+{{- range $index, $adapter := .Values.providerAdapters }}
 {{- if $index }}
 ---
 {{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "gwai.anthropicSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
+  name: {{ include "gwai.adapterSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
   labels:
     {{- include "gwai.labels" $root | nindent 4 }}
 rules:
@@ -19,15 +19,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "gwai.anthropicSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
+  name: {{ include "gwai.adapterSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
   labels:
     {{- include "gwai.labels" $root | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "gwai.anthropicServiceAccountName" (dict "root" $root "adapter" $adapter) }}
+    name: {{ include "gwai.adapterServiceAccountName" (dict "root" $root "adapter" $adapter) }}
     namespace: {{ $root.Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "gwai.anthropicSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
+  name: {{ include "gwai.adapterSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
 {{- end }}

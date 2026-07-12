@@ -4,41 +4,76 @@
 {{- if and .Values.valkey.enabled .Values.valkey.tls.enabled }}
 {{- fail "valkey.tls.enabled is only supported for an external Valkey endpoint (valkey.enabled=false)" }}
 {{- end }}
-{{- if eq (len .Values.anthropicAdapters) 0 }}
-{{- fail "at least one anthropicAdapters entry is required" }}
+{{- if eq (len .Values.gateways) 0 }}
+{{- fail "at least one gateways entry is required" }}
+{{- end }}
+{{- if eq (len .Values.providerAdapters) 0 }}
+{{- fail "at least one providerAdapters entry is required" }}
+{{- end }}
+{{- $gatewayNames := dict }}
+{{- range $index, $gateway := .Values.gateways }}
+{{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $gateway.name) }}
+{{- fail (printf "gateways[%d].name must be a lowercase DNS label" $index) }}
+{{- end }}
+{{- if hasKey $gatewayNames $gateway.name }}
+{{- fail (printf "gateways[%d].name must be unique" $index) }}
+{{- end }}
+{{- $_ := set $gatewayNames $gateway.name true }}
+{{- if not $gateway.image.repository }}
+{{- fail (printf "gateways[%d].image.repository is required" $index) }}
+{{- end }}
+{{- if or (le (int $gateway.replicas) 0) (le (int $gateway.port) 0) (le (int64 $gateway.maxBodyBytes) 0) }}
+{{- fail (printf "gateways[%d] replicas, port and maxBodyBytes must be positive" $index) }}
+{{- end }}
 {{- end }}
 {{- $names := dict }}
 {{- $slugs := dict }}
 {{- $appIDs := dict }}
-{{- range $index, $adapter := .Values.anthropicAdapters }}
+{{- range $index, $adapter := .Values.providerAdapters }}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $adapter.name) }}
-{{- fail (printf "anthropicAdapters[%d].name must be a lowercase DNS label" $index) }}
+{{- fail (printf "providerAdapters[%d].name must be a lowercase DNS label" $index) }}
 {{- end }}
 {{- if hasKey $names $adapter.name }}
-{{- fail (printf "anthropicAdapters[%d].name must be unique" $index) }}
+{{- fail (printf "providerAdapters[%d].name must be unique" $index) }}
 {{- end }}
 {{- $_ := set $names $adapter.name true }}
+{{- if not (has $adapter.kind (list "anthropic" "openai-chat" "openai-responses" "gemini")) }}
+{{- fail (printf "providerAdapters[%d].kind is unsupported" $index) }}
+{{- end }}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $adapter.providerSlug) }}
-{{- fail (printf "anthropicAdapters[%d].providerSlug must be a lowercase DNS label" $index) }}
+{{- fail (printf "providerAdapters[%d].providerSlug must be a lowercase DNS label" $index) }}
 {{- end }}
 {{- if hasKey $slugs $adapter.providerSlug }}
-{{- fail (printf "anthropicAdapters[%d].providerSlug must be unique" $index) }}
+{{- fail (printf "providerAdapters[%d].providerSlug must be unique" $index) }}
 {{- end }}
 {{- $_ := set $slugs $adapter.providerSlug true }}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?$" $adapter.appID) }}
-{{- fail (printf "anthropicAdapters[%d].appID must be a valid lowercase Dapr app ID" $index) }}
+{{- fail (printf "providerAdapters[%d].appID must be a valid lowercase Dapr app ID" $index) }}
 {{- end }}
 {{- if hasKey $appIDs $adapter.appID }}
-{{- fail (printf "anthropicAdapters[%d].appID must be unique" $index) }}
+{{- fail (printf "providerAdapters[%d].appID must be unique" $index) }}
 {{- end }}
 {{- $_ := set $appIDs $adapter.appID true }}
-{{- if le (int $adapter.defaultMaxOutputTokens) 0 }}
-{{- fail (printf "anthropicAdapters[%d].defaultMaxOutputTokens must be positive" $index) }}
+{{- if not $adapter.image.repository }}
+{{- fail (printf "providerAdapters[%d].image.repository is required" $index) }}
 {{- end }}
-{{- if or (lt (int $adapter.maxOutputTokens) 0) (and (gt (int $adapter.maxOutputTokens) 0) (lt (int $adapter.maxOutputTokens) (int $adapter.defaultMaxOutputTokens))) }}
-{{- fail (printf "anthropicAdapters[%d].maxOutputTokens must be zero or at least defaultMaxOutputTokens" $index) }}
+{{- if or (le (int $adapter.replicas) 0) (le (int $adapter.port) 0) (le (int64 $adapter.maxBodyBytes) 0) }}
+{{- fail (printf "providerAdapters[%d] replicas, port and maxBodyBytes must be positive" $index) }}
+{{- end }}
+{{- if hasKey $adapter "defaultMaxOutputTokens" }}
+{{- if le (int $adapter.defaultMaxOutputTokens) 0 }}
+{{- fail (printf "providerAdapters[%d].defaultMaxOutputTokens must be positive" $index) }}
+{{- end }}
+{{- end }}
+{{- if hasKey $adapter "maxOutputTokens" }}
+{{- if lt (int $adapter.maxOutputTokens) 0 }}
+{{- fail (printf "providerAdapters[%d].maxOutputTokens must not be negative" $index) }}
+{{- end }}
+{{- if and (hasKey $adapter "defaultMaxOutputTokens") (gt (int $adapter.maxOutputTokens) 0) (lt (int $adapter.maxOutputTokens) (int $adapter.defaultMaxOutputTokens)) }}
+{{- fail (printf "providerAdapters[%d].maxOutputTokens must be zero or at least defaultMaxOutputTokens" $index) }}
+{{- end }}
 {{- end }}
 {{- if eq (len $adapter.secretNames) 0 }}
-{{- fail (printf "anthropicAdapters[%d].secretNames must contain at least one Secret" $index) }}
+{{- fail (printf "providerAdapters[%d].secretNames must contain at least one Secret" $index) }}
 {{- end }}
 {{- end }}

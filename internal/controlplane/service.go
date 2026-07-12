@@ -178,6 +178,7 @@ func (s *Service) DeleteUser(ctx context.Context, id string) error {
 }
 
 var appIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?$`)
+var apiVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 func normalizeProviderInput(input ProviderInput) (ProviderInput, error) {
 	input.Slug = strings.TrimSpace(input.Slug)
@@ -193,11 +194,30 @@ func normalizeProviderInput(input ProviderInput) (ProviderInput, error) {
 	if err := validateProviderSlug(input.Slug); err != nil {
 		return input, err
 	}
-	if input.Kind != "anthropic" {
-		return input, &ValidationError{Field: "kind", Message: "only anthropic is currently supported"}
-	}
-	if input.BaseURL == "" {
-		input.BaseURL = "https://api.anthropic.com"
+	switch input.Kind {
+	case ProviderKindAnthropic:
+		if input.BaseURL == "" {
+			input.BaseURL = "https://api.anthropic.com"
+		}
+		if input.APIVersion == "" {
+			input.APIVersion = "2023-06-01"
+		}
+	case ProviderKindOpenAIChat, ProviderKindOpenAIResponses:
+		if input.BaseURL == "" {
+			input.BaseURL = "https://api.openai.com"
+		}
+		if input.APIVersion == "" {
+			input.APIVersion = "v1"
+		}
+	case ProviderKindGemini:
+		if input.BaseURL == "" {
+			input.BaseURL = "https://generativelanguage.googleapis.com"
+		}
+		if input.APIVersion == "" {
+			input.APIVersion = "v1beta"
+		}
+	default:
+		return input, &ValidationError{Field: "kind", Message: "must be anthropic, openai-chat, openai-responses, or gemini"}
 	}
 	parsed, err := url.ParseRequestURI(input.BaseURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
@@ -206,8 +226,8 @@ func normalizeProviderInput(input ProviderInput) (ProviderInput, error) {
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return input, &ValidationError{Field: "base_url", Message: "must not contain credentials, a query, or a fragment"}
 	}
-	if input.APIVersion == "" {
-		input.APIVersion = "2023-06-01"
+	if !apiVersionPattern.MatchString(input.APIVersion) {
+		return input, &ValidationError{Field: "api_version", Message: "must be a valid API version token"}
 	}
 	if input.AdapterAppID == "" || !appIDPattern.MatchString(input.AdapterAppID) {
 		return input, &ValidationError{Field: "adapter_app_id", Message: "must be a valid lowercase Dapr app ID"}

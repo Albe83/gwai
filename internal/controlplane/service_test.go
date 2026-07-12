@@ -173,6 +173,48 @@ func TestServiceRejectsAmbiguousProviderURL(t *testing.T) {
 	}
 }
 
+func TestNormalizeProviderInputSupportsEveryAdapterKind(t *testing.T) {
+	tests := []struct {
+		kind       string
+		baseURL    string
+		apiVersion string
+	}{
+		{ProviderKindAnthropic, "https://api.anthropic.com", "2023-06-01"},
+		{ProviderKindOpenAIChat, "https://api.openai.com", "v1"},
+		{ProviderKindOpenAIResponses, "https://api.openai.com", "v1"},
+		{ProviderKindGemini, "https://generativelanguage.googleapis.com", "v1beta"},
+	}
+	for _, test := range tests {
+		t.Run(test.kind, func(t *testing.T) {
+			result, err := normalizeProviderInput(ProviderInput{
+				Slug: "provider", Name: "Provider", Kind: test.kind, AdapterAppID: "provider-adapter",
+				SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "provider-key"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.BaseURL != test.baseURL || result.APIVersion != test.apiVersion {
+				t.Fatalf("unexpected defaults: %+v", result)
+			}
+		})
+	}
+}
+
+func TestNormalizeProviderInputRejectsUnknownKindAndInvalidVersion(t *testing.T) {
+	base := ProviderInput{
+		Slug: "provider", Name: "Provider", Kind: "unknown", AdapterAppID: "provider-adapter",
+		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "provider-key"},
+	}
+	if _, err := normalizeProviderInput(base); err == nil {
+		t.Fatal("expected unknown provider kind to be rejected")
+	}
+	base.Kind = ProviderKindGemini
+	base.APIVersion = "../../secrets"
+	if _, err := normalizeProviderInput(base); err == nil {
+		t.Fatal("expected invalid API version to be rejected")
+	}
+}
+
 func TestQualifiedModelRequiresKnownProviderInVirtualKey(t *testing.T) {
 	service, _, _ := newTestService()
 	user, _, _ := provisionTestRoute(t, service)

@@ -15,7 +15,10 @@ import (
 	"github.com/Albe83/gwai/internal/anthropic"
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
-	openaiadapter "github.com/Albe83/gwai/internal/openai"
+	"github.com/Albe83/gwai/internal/dataplane"
+	"github.com/Albe83/gwai/internal/gemini"
+	openaichat "github.com/Albe83/gwai/internal/openai"
+	"github.com/Albe83/gwai/internal/openairesponses"
 	"github.com/Albe83/gwai/internal/state"
 )
 
@@ -96,7 +99,7 @@ func adminRequest[T any](t *testing.T, handler http.Handler, method, path string
 	return result
 }
 
-func TestOpenAIToAnthropicVerticalSlice(t *testing.T) {
+func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	var captured anthropic.MessageRequest
@@ -135,7 +138,7 @@ func TestOpenAIToAnthropicVerticalSlice(t *testing.T) {
 		}, logger,
 	)
 	invoker.register("gwai-anthropic-test", adapterHandler)
-	gatewayHandler := openaiadapter.NewHTTPHandler(runtime, invoker, 10<<20, time.Minute, logger)
+	gatewayHandler := openaichat.NewHTTPHandler(runtime, invoker, 10<<20, time.Minute, logger)
 
 	user := adminRequest[controlplane.User](t, controlHandler, http.MethodPost, "/v1/users", controlplane.UserInput{Name: "Ada", Email: "ada@example.com"})
 	provider := adminRequest[controlplane.Provider](t, controlHandler, http.MethodPost, "/v1/providers", controlplane.ProviderInput{
@@ -164,7 +167,7 @@ func TestOpenAIToAnthropicVerticalSlice(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("gateway returned %d: %s", recorder.Code, recorder.Body.String())
 	}
-	var completion openaiadapter.ChatCompletionResponse
+	var completion openaichat.ChatCompletionResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &completion); err != nil {
 		t.Fatal(err)
 	}
@@ -176,5 +179,66 @@ func TestOpenAIToAnthropicVerticalSlice(t *testing.T) {
 	}
 	if captured.Model != "claude-test" || captured.MaxTokens != 64 || len(captured.System) != 1 || captured.Messages[0].Content[0].Text != "Saluta" {
 		t.Fatalf("unexpected request received by Anthropic: %+v", captured)
+	}
+
+	responsesGateway := openairesponses.NewGatewayHTTPHandler(runtime, invoker, 10<<20, time.Minute, logger)
+	request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{
+		"model":"anthropic-test/claude-test","input":"Saluta","max_output_tokens":64,"store":false
+	}`)))
+	request.Header.Set("Authorization", "Bearer "+createdKey.Key)
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	responsesGateway.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Responses gateway returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var responsesOutput openairesponses.Response
+	if err := json.Unmarshal(recorder.Body.Bytes(), &responsesOutput); err != nil {
+		t.Fatal(err)
+	}
+	if responsesOutput.Output[0].Content[0].Text != "Ciao dal provider" || responsesOutput.Usage.TotalTokens != 12 {
+		t.Fatalf("unexpected Responses output: %+v", responsesOutput)
+	}
+
+	anthropicGateway := anthropic.NewGatewayHTTPHandler(dataplane.NewDispatcher(runtime, invoker, time.Minute), 10<<20, logger)
+	request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader([]byte(`{
+		"model":"anthropic-test/claude-test","max_tokens":64,"system":"Rispondi in italiano",
+		"messages":[{"role":"user","content":"Saluta"}]
+	}`)))
+	request.Header.Set("x-api-key", createdKey.Key)
+	request.Header.Set("anthropic-version", anthropic.PublicAPIVersion)
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	anthropicGateway.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Anthropic gateway returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var anthropicOutput anthropic.MessageResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &anthropicOutput); err != nil {
+		t.Fatal(err)
+	}
+	if anthropicOutput.Content[0].Text != "Ciao dal provider" || anthropicOutput.Usage.InputTokens+anthropicOutput.Usage.OutputTokens != 12 {
+		t.Fatalf("unexpected Anthropic output: %+v", anthropicOutput)
+	}
+
+	geminiGateway := gemini.NewGatewayHTTPHandler(runtime, invoker, gemini.GatewayConfig{APIVersion: "v1beta", MaxBody: 10 << 20, RequestTimeout: time.Minute}, logger)
+	request = httptest.NewRequest(http.MethodPost, "/v1beta/models/anthropic-test/claude-test:generateContent", bytes.NewReader([]byte(`{
+		"systemInstruction":{"parts":[{"text":"Rispondi in italiano"}]},
+		"contents":[{"role":"user","parts":[{"text":"Saluta"}]}],
+		"generationConfig":{"maxOutputTokens":64}
+	}`)))
+	request.Header.Set("x-goog-api-key", createdKey.Key)
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	geminiGateway.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Gemini gateway returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var geminiOutput gemini.GenerateContentResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &geminiOutput); err != nil {
+		t.Fatal(err)
+	}
+	if *geminiOutput.Candidates[0].Content.Parts[0].Text != "Ciao dal provider" || geminiOutput.UsageMetadata.TotalTokenCount != 12 {
+		t.Fatalf("unexpected Gemini output: %+v", geminiOutput)
 	}
 }

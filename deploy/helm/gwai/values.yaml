@@ -10,10 +10,6 @@ global:
 images:
   controlPlane:
     repository: gwai-control-plane
-  openaiGateway:
-    repository: gwai-openai-gateway
-  anthropicAdapter:
-    repository: gwai-anthropic-adapter
 
 serviceAccount:
   create: true
@@ -51,35 +47,69 @@ controlPlane:
       cpu: 500m
       memory: 256Mi
 
-openaiGateway:
-  replicas: 1
-  port: 8080
-  maxBodyBytes: 10485760
-  requestTimeout: 5m
-  service:
-    type: ClusterIP
+# Gateways expose independent client protocols. They share only the versioned
+# IR dispatcher and can target every registered provider adapter.
+gateways:
+  - name: openai-gateway
+    image:
+      repository: gwai-openai-gateway
+    replicas: 1
     port: 8080
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: "1"
-      memory: 512Mi
+    maxBodyBytes: 10485760
+    requestTimeout: 5m
+    service:
+      type: ClusterIP
+      port: 8080
+    resources: &gatewayResources
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  - name: openai-responses-gateway
+    image:
+      repository: gwai-openai-responses-gateway
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    requestTimeout: 5m
+    service: {type: ClusterIP, port: 8080}
+    resources: *gatewayResources
+  - name: anthropic-gateway
+    image:
+      repository: gwai-anthropic-gateway
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    requestTimeout: 5m
+    service: {type: ClusterIP, port: 8080}
+    resources: *gatewayResources
+  - name: gemini-gateway
+    image:
+      repository: gwai-gemini-gateway
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    requestTimeout: 5m
+    service: {type: ClusterIP, port: 8080}
+    resources: *gatewayResources
 
-# Each configured provider account gets its own Dapr identity and adapter
-# workload. The provider record created through the admin API must use the same
-# providerSlug and appID values.
-anthropicAdapters:
+# Each provider account gets its own Dapr identity and adapter workload. The
+# control-plane provider record must use the same providerSlug, kind and appID.
+providerAdapters:
   - name: primary
+    kind: anthropic
     providerSlug: anthropic
     appID: gwai-anthropic
+    image:
+      repository: gwai-anthropic-adapter
     replicas: 1
     port: 8080
     maxBodyBytes: 10485760
     providerTimeout: 5m
     defaultMaxOutputTokens: 4096
-    # Zero delegates the upper bound to Anthropic.
+    # Adapter-specific optional limits. Zero delegates the upper bound.
     maxOutputTokens: 0
     # Kubernetes RBAC and the Dapr secret scope are restricted per instance.
     secretNames:

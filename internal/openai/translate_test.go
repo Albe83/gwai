@@ -85,6 +85,25 @@ func TestToIRRejectsKnownUnmappedParameters(t *testing.T) {
 	}
 }
 
+func TestToIRRejectsUnknownOrMisplacedMessageFields(t *testing.T) {
+	route := controlplane.Route{ProviderID: "p", UpstreamModel: "m"}
+	tests := []ChatCompletionRequest{
+		{
+			Model:    "m",
+			Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"hi","future":true}]`)}},
+		},
+		{
+			Model:    "m",
+			Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"hi"`), ToolCalls: []ToolCall{{ID: "call", Type: "function", Function: ToolCallFunction{Name: "f", Arguments: `{}`}}}}},
+		},
+	}
+	for index, request := range tests {
+		if _, err := ToIR(request, route, "r"); err == nil {
+			t.Fatalf("case %d: expected invalid message fields to be rejected", index)
+		}
+	}
+}
+
 func TestToIRRejectsMissingNamedTool(t *testing.T) {
 	request := ChatCompletionRequest{
 		Model: "m", Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}},

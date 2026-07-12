@@ -1,7 +1,6 @@
 package openai
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -9,32 +8,24 @@ import (
 
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
+	"github.com/Albe83/gwai/internal/dataplane"
 	"github.com/Albe83/gwai/internal/ir"
 	"github.com/Albe83/gwai/internal/platform"
 )
 
-type AdapterInvoker interface {
-	InvokeJSON(context.Context, string, string, any, any) error
-}
-
-type Runtime interface {
-	Authorize(context.Context, string, string) (controlplane.Authorization, error)
-	ResolveRoute(context.Context, string) (controlplane.Route, error)
-}
-
 type HTTPHandler struct {
-	runtime        Runtime
-	invoker        AdapterInvoker
-	maxBody        int64
-	requestTimeout time.Duration
-	logger         *slog.Logger
-	now            func() time.Time
+	dispatcher *dataplane.Dispatcher
+	maxBody    int64
+	logger     *slog.Logger
+	now        func() time.Time
 }
 
-func NewHTTPHandler(runtime Runtime, invoker AdapterInvoker, maxBody int64, requestTimeout time.Duration, logger *slog.Logger) http.Handler {
+func NewHTTPHandler(runtime dataplane.Runtime, invoker dataplane.Invoker, maxBody int64, requestTimeout time.Duration, logger *slog.Logger) http.Handler {
 	handler := &HTTPHandler{
-		runtime: runtime, invoker: invoker, maxBody: maxBody,
-		requestTimeout: requestTimeout, logger: logger, now: func() time.Time { return time.Now().UTC() },
+		dispatcher: dataplane.NewDispatcher(runtime, invoker, requestTimeout),
+		maxBody:    maxBody,
+		logger:     logger,
+		now:        func() time.Time { return time.Now().UTC() },
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", handler.health)
@@ -87,34 +78,16 @@ func (h *HTTPHandler) createChatCompletion(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var request ChatCompletionRequest
-	if err := platform.DecodeJSON(r, &request, h.maxBody, false); err != nil {
+	if err := platform.DecodeJSON(r, &request, h.maxBody, true); err != nil {
 		h.writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", err.Error(), "")
 		return
 	}
 
-	ctx := r.Context()
-	if h.requestTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, h.requestTimeout)
-		defer cancel()
-	}
-	if _, err := h.runtime.Authorize(ctx, token, request.Model); err != nil {
-		h.writeRuntimeError(w, r, err)
-		return
-	}
-	route, err := h.runtime.ResolveRoute(ctx, request.Model)
-	if err != nil {
-		h.writeRuntimeError(w, r, err)
-		return
-	}
 	requestID := platform.RequestID(r.Context())
-	internalRequest, err := ToIR(request, route, requestID)
+	internalResponse, err := h.dispatcher.Generate(r.Context(), token, request.Model, requestID, func(route controlplane.Route, id string) (ir.Request, error) {
+		return ToIR(request, route, id)
+	})
 	if err != nil {
-		h.writeRuntimeError(w, r, err)
-		return
-	}
-	var internalResponse ir.Response
-	if err := h.invoker.InvokeJSON(ctx, route.AdapterAppID, "/v1/generate", internalRequest, &internalResponse); err != nil {
 		h.writeRuntimeError(w, r, err)
 		return
 	}

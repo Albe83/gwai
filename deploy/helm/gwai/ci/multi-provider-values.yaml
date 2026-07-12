@@ -1,7 +1,9 @@
-anthropicAdapters:
+providerAdapters:
   - name: team-a
-    providerSlug: team-a
-    appID: gwai-team-a
+    kind: anthropic
+    providerSlug: anthropic-team-a
+    appID: gwai-anthropic-team-a
+    image: {repository: gwai-anthropic-adapter}
     replicas: 2
     port: 8080
     maxBodyBytes: 10485760
@@ -9,19 +11,39 @@ anthropicAdapters:
     defaultMaxOutputTokens: 4096
     maxOutputTokens: 8192
     secretNames: [anthropic-team-a]
-    resources:
+    resources: &adapterResources
       requests: {cpu: 50m, memory: 64Mi}
       limits: {cpu: "1", memory: 512Mi}
   - name: team-b
-    providerSlug: team-b
-    appID: gwai-team-b
+    kind: openai-chat
+    providerSlug: openai-chat-team-b
+    appID: gwai-openai-chat-team-b
+    image: {repository: gwai-openai-chat-adapter}
     replicas: 1
     port: 8080
     maxBodyBytes: 10485760
     providerTimeout: 5m
-    defaultMaxOutputTokens: 2048
-    maxOutputTokens: 0
-    secretNames: [anthropic-team-b]
-    resources:
-      requests: {cpu: 50m, memory: 64Mi}
-      limits: {cpu: "1", memory: 512Mi}
+    secretNames: [openai-team-b]
+    resources: *adapterResources
+  - name: team-c
+    kind: openai-responses
+    providerSlug: openai-responses-team-c
+    appID: gwai-openai-responses-team-c
+    image: {repository: gwai-openai-responses-adapter}
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    providerTimeout: 5m
+    secretNames: [openai-team-c]
+    resources: *adapterResources
+  - name: team-d
+    kind: gemini
+    providerSlug: gemini-team-d
+    appID: gwai-gemini-team-d
+    image: {repository: gwai-gemini-adapter}
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    providerTimeout: 5m
+    secretNames: [gemini-team-d]
+    resources: *adapterResources

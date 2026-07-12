@@ -100,7 +100,7 @@ func (h *HTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, status, "Provider resolution failed", "the configured provider is unavailable", err)
 		return
 	}
-	if provider.Kind != "anthropic" {
+	if provider.Kind != controlplane.ProviderKindAnthropic {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid provider", "this adapter only accepts Anthropic providers", nil)
 		return
 	}
@@ -108,9 +108,17 @@ func (h *HTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid route", "the request is not addressed to this provider adapter", nil)
 		return
 	}
+	if strings.TrimSpace(provider.APIVersion) == "" {
+		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid provider", "the Anthropic API version is not configured", nil)
+		return
+	}
 	apiKey, err := h.secrets.Get(r.Context(), provider.SecretRef)
 	if err != nil {
 		h.fail(w, r, http.StatusBadGateway, "Provider credential unavailable", "the provider credential could not be loaded", err)
+		return
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		h.fail(w, r, http.StatusBadGateway, "Provider credential unavailable", "the provider credential is empty", nil)
 		return
 	}
 	providerRequest, err := ToMessageRequest(internalRequest, h.config.DefaultMaxOutputTokens, h.config.MaxOutputTokens)

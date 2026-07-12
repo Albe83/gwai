@@ -8,7 +8,9 @@ K3S ?= /usr/local/bin/k3s
 JQ ?= jq
 REGISTRY ?= localhost
 TAG ?= dev
-SERVICES := control-plane openai-gateway anthropic-adapter
+SERVICES := control-plane \
+	openai-gateway openai-responses-gateway anthropic-gateway gemini-gateway \
+	openai-chat-adapter openai-responses-adapter anthropic-adapter gemini-adapter
 IMAGE_PREFIX := $(if $(REGISTRY),$(REGISTRY)/,)
 IMAGES := $(foreach service,$(SERVICES),$(IMAGE_PREFIX)gwai-$(service):$(TAG))
 
@@ -57,6 +59,10 @@ images-load-k3s:
 	done
 
 local-deploy: images images-load-k3s deploy
+	$(KUBECTL) --namespace gwai rollout restart deployment \
+		--selector app.kubernetes.io/instance=gwai
+	$(KUBECTL) --namespace gwai rollout status deployment \
+		--selector app.kubernetes.io/instance=gwai --timeout=180s
 
 e2e-k3s:
 	GO=$(GO) ./scripts/e2e-k3s.sh

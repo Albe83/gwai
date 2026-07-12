@@ -38,7 +38,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [control-plane, openai-gateway, anthropic-adapter]
+        service:
+          - control-plane
+          - openai-gateway
+          - openai-responses-gateway
+          - anthropic-gateway
+          - gemini-gateway
+          - openai-chat-adapter
+          - openai-responses-adapter
+          - anthropic-adapter
+          - gemini-adapter
     steps:
       - uses: actions/checkout@v6
       - name: Build image

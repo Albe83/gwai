@@ -5,8 +5,9 @@ Read the generated control-plane admin token:
 
 Reach the APIs locally:
   kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.fullname" . }}-control-plane 8081:{{ .Values.controlPlane.port }}
-  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.fullname" . }}-openai-gateway 8080:{{ .Values.openaiGateway.service.port }}
+{{ range $gateway := .Values.gateways }}
+  kubectl -n {{ $.Release.Namespace }} port-forward service/{{ include "gwai.gatewayName" (dict "root" $ "gateway" $gateway) }} 8080:{{ $gateway.service.port }}
+{{ end }}
 
 Provider API keys are not Helm values. Create a Kubernetes Secret and reference
 its name/key when creating the provider in the control-plane API.
-

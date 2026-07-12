@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Albe83/gwai/internal/ir"
@@ -39,6 +40,24 @@ func TestToMessageRequestMapsSystemAndToolMessages(t *testing.T) {
 	}
 }
 
+func TestToMessageRequestMapsStructuredToolResultWithoutRequiringName(t *testing.T) {
+	request := ir.Request{
+		Version: ir.Version, ID: "req_1", Route: ir.Route{ProviderID: "p", UpstreamModel: "claude-test"},
+		Messages: []ir.Message{
+			{Role: ir.RoleAssistant, Content: []ir.Content{{Type: ir.ContentToolCall, ToolCall: &ir.ToolCall{ID: "call_1", Name: "weather", Arguments: json.RawMessage(`{}`)}}}},
+			{Role: ir.RoleTool, Content: []ir.Content{{Type: ir.ContentToolResult, ToolResult: &ir.ToolResult{ToolCallID: "call_1", Result: json.RawMessage(`{"temperature":24}`)}}}},
+		},
+	}
+	result, err := ToMessageRequest(request, 64, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := result.Messages[1].Content[0]
+	if block.Type != "tool_result" || block.ToolUseID != "call_1" || len(block.Content) != 1 || block.Content[0].Text != `{"temperature":24}` {
+		t.Fatalf("unexpected Anthropic tool result: %+v", block)
+	}
+}
+
 func TestToMessageRequestUsesAdapterTokenDefaultAndLimit(t *testing.T) {
 	request := ir.Request{
 		Version: ir.Version, ID: "req_1", Route: ir.Route{ProviderID: "p", UpstreamModel: "claude-test"},
@@ -61,18 +80,25 @@ func TestToMessageRequestUsesAdapterTokenDefaultAndLimit(t *testing.T) {
 func TestToIRResponseMapsStopReasonAndUsage(t *testing.T) {
 	request := ir.Request{ID: "req_1", Route: ir.Route{UpstreamModel: "claude-test"}}
 	result, err := ToIRResponse(MessageResponse{
-		ID: "msg_1", StopReason: "tool_use", Usage: Usage{
+		ID: "msg_1", Type: "message", Role: "assistant", Model: "claude-test", StopReason: "tool_use", Usage: Usage{
 			InputTokens: 12, OutputTokens: 5, CacheCreationInputTokens: 3, CacheReadInputTokens: 7,
 		},
-		Content: []ContentBlock{
-			{Type: "thinking"},
-			{Type: "tool_use", ID: "call_1", Name: "weather", Input: json.RawMessage(`{"city":"Rome"}`)},
-		},
+		Content: []ContentBlock{{Type: "tool_use", ID: "call_1", Name: "weather", Input: json.RawMessage(`{"city":"Rome"}`)}},
 	}, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.FinishReason != ir.FinishToolCalls || result.Usage.InputTokens != 22 || result.Usage.CachedInputTokens != 7 || result.Content[0].ToolCall.Name != "weather" {
+	if result.FinishReason != ir.FinishToolCalls || result.Usage.InputTokens != 22 || result.Usage.CacheCreationInputTokens != 3 || result.Usage.CachedInputTokens != 7 || result.Content[0].ToolCall.Name != "weather" {
 		t.Fatalf("unexpected IR response: %+v", result)
+	}
+}
+
+func TestToIRResponseRejectsThinkingOutput(t *testing.T) {
+	_, err := ToIRResponse(MessageResponse{
+		ID: "msg_1", Type: "message", Role: "assistant", Model: "claude-test", StopReason: "end_turn",
+		Content: []ContentBlock{{Type: "thinking", Text: "hidden"}},
+	}, ir.Request{ID: "req_1", Route: ir.Route{UpstreamModel: "claude-test"}})
+	if err == nil || !strings.Contains(err.Error(), "thinking") {
+		t.Fatalf("expected explicit thinking rejection, got %v", err)
 	}
 }

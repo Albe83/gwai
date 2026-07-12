@@ -6,8 +6,10 @@ metadata:
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
 scopes:
-  - {{ include "gwai.fullname" . }}-openai-gateway
-  {{- range $adapter := .Values.anthropicAdapters }}
+  {{- range $gateway := .Values.gateways }}
+  - {{ include "gwai.gatewayName" (dict "root" $ "gateway" $gateway) }}
+  {{- end }}
+  {{- range $adapter := .Values.providerAdapters }}
   - {{ $adapter.appID | quote }}
   {{- end }}
 spec:
@@ -21,7 +23,7 @@ spec:
         maxRetries: 40
   targets:
     apps:
-      {{- range $adapter := .Values.anthropicAdapters }}
+      {{- range $adapter := .Values.providerAdapters }}
       {{ $adapter.appID | quote }}:
         retry: DaprBuiltInServiceRetries
       {{- end }}
