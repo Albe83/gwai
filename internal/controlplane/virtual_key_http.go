@@ -29,6 +29,8 @@ func NewVirtualKeyHTTPHandler(service *VirtualKeyService, adminToken, appToken s
 	mux.Handle("DELETE /v1/virtual-keys/{id}", handler.admin(http.HandlerFunc(handler.deleteVirtualKey)))
 	mux.Handle("POST /internal/v1/subjects/sync", handler.internal(http.HandlerFunc(handler.syncSubject)))
 	mux.Handle("POST /internal/v1/subjects/fence", handler.internal(http.HandlerFunc(handler.fenceSubject)))
+	mux.Handle("POST /internal/v1/model-subjects/sync", handler.internal(http.HandlerFunc(handler.syncModelSubject)))
+	mux.Handle("POST /internal/v1/model-subjects/fence", handler.internal(http.HandlerFunc(handler.fenceModelSubject)))
 	return platform.HTTPMiddleware(logger, mux)
 }
 
@@ -114,6 +116,30 @@ func (h *VirtualKeyHTTPHandler) fenceSubject(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := h.service.FenceSubject(r.Context(), subject); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *VirtualKeyHTTPHandler) syncModelSubject(w http.ResponseWriter, r *http.Request) {
+	var subject ModelSubject
+	if !h.decode(w, r, &subject) {
+		return
+	}
+	if err := h.service.SyncModel(r.Context(), subject); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *VirtualKeyHTTPHandler) fenceModelSubject(w http.ResponseWriter, r *http.Request) {
+	var subject ModelSubject
+	if !h.decode(w, r, &subject) {
+		return
+	}
+	if err := h.service.FenceModel(r.Context(), subject); err != nil {
 		h.writeError(w, r, err)
 		return
 	}

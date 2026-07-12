@@ -12,7 +12,7 @@ translator instead of a converter for every client/provider pair.
 | Client gateway | OpenAI Chat Completions | `POST /v1/chat/completions` |
 | Client gateway | OpenAI Responses | `POST /v1/responses` |
 | Client gateway | Anthropic Messages | `POST /v1/messages` |
-| Client gateway | Gemini GenerateContent | `POST /v1beta/models/{qualified-model}:generateContent` |
+| Client gateway | Gemini GenerateContent | `POST /v1beta/models/{model-alias}:generateContent` |
 | Provider adapter | OpenAI Chat Completions | `openai-chat` |
 | Provider adapter | OpenAI Responses | `openai-responses` |
 | Provider adapter | Anthropic Messages | `anthropic` |
@@ -33,13 +33,12 @@ flowchart LR
     UI -->|authenticated Dapr BFF calls| CP
     UI -->|authenticated Dapr BFF calls| KP
     Clients[OpenAI / Anthropic / Gemini clients] --> Gateways[Four protocol gateways]
-    CP[Resource control plane<br/>users + providers] -->|private users| CS[(Control state)]
-    CP -->|provider lifecycle| PS[(Provider state)]
-    CP -->|Dapr subject sync / fence| KP[Virtual-key control plane]
-    KP -->|key lifecycle + subject projection| KS[(Virtual-key state)]
-    KP -->|validate provider slugs| PS
-    Gateways -->|read key + subject| KS
-    Gateways -->|resolve route| PS
+    CP[Resource control plane<br/>users + models + providers] -->|private users| CS[(Control state)]
+    CP -->|model + provider lifecycle| PS[(Provider state)]
+    CP -->|Dapr user/model sync + fence| KP[Virtual-key control plane]
+    KP -->|key lifecycle + validate user/model projections| KS[(Virtual-key state)]
+    Gateways -->|read key + user/model subjects| KS
+    Gateways -->|resolve model alias + provider| PS
     Gateways -->|Dapr invocation: IR 2026-07-12| Adapters[Provider-specific adapter instance]
     Adapters -->|read own provider| PS
     Adapters -->|Dapr Secret Store| Secrets[Kubernetes Secret]
@@ -49,23 +48,23 @@ flowchart LR
 Gateways contain no provider HTTP client and adapters contain no client-gateway
 logic. The selected `adapter_app_id` is resolved from state and invoked through
 Dapr at `/v1/generate`. Neither control-plane service is on the inference path.
-Users/providers and virtual keys have independently deployable administrative
-services. Three scoped state components keep private user data, provider runtime
-configuration and key authorization records in separate Valkey logical
-databases. The contract is
+Users/models/providers and virtual keys have independently deployable
+administrative services. Three scoped state components keep private user data,
+the model/provider routing catalog and key authorization records in separate
+Valkey logical databases. The contract is
 [`2026-07-12.schema.json`](api/ir/2026-07-12.schema.json).
 
 ## What works
 
-- Separate CRUD services for users/providers and virtual keys.
-- A server-rendered administrative WebUI for user, provider and virtual-key
+- Separate CRUD services for users/models/providers and virtual keys.
+- A server-rendered administrative WebUI for user, model, provider and virtual-key
   lifecycle operations; the admin credential remains in its Go backend, and an
   optional Gateway API HTTPRoute can expose it through an existing HTTPS
   Gateway.
-- One-time virtual-key disclosure with exact `provider/model` allowlists,
-  expiry and user/key/provider disablement.
-- Revisioned user-subject projection, atomic deletion fencing and fail-closed
-  gateway authorization.
+- One-time virtual-key disclosure with non-empty Model-ID allowlists,
+  expiry and user/key/Model/Provider disablement.
+- Revisioned user/model projections, atomic deletion fencing and fail-closed
+  gateway authorization across the complete User → VKey → Model → Provider chain.
 - Direct data-plane reads and provider-specific Dapr service invocation.
 - Per-provider identities, Secret scopes, Dapr mTLS/tokens/ACLs and retries.
 - Generic Helm lists for any mix of the four gateways and provider adapters.
@@ -113,7 +112,9 @@ recorded in [dependencies](docs/dependencies.md).
 This is pre-release software. Before public exposure, add streaming, quotas,
 audit events, external observability, provider failover and a production-grade
 high-availability state store. IR `2026-07-12` is intentionally incompatible
-with the earlier pre-release IR. The control-plane decomposition also replaces
-the former `gwai-state` registry with three state domains. There is no automatic
-0.x state migration: use a fresh installation or deliberately reset the old
-pre-release state before upgrading.
+with the earlier pre-release IR. The control-plane decomposition replaces the
+former `gwai-state` registry with three state domains, and the Model catalog
+replaces qualified model strings in virtual keys with required Model IDs. There
+is no automatic 0.x state migration: use a fresh installation or deliberately
+reset and reprovision all pre-release users, providers, models and virtual keys
+before upgrading.

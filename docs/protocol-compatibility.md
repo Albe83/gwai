@@ -1,8 +1,8 @@
 # Protocol compatibility
 
 gwai exposes four unary client APIs and can target four provider APIs. Client
-and provider selection are independent: a qualified model resolves a provider
-record whose `adapter_app_id` receives the canonical IR.
+and provider selection are independent: a Model alias resolves a catalog record
+and then the Provider whose `adapter_app_id` receives the canonical IR.
 
 ## Protocol endpoints
 
@@ -11,7 +11,7 @@ record whose `adapter_app_id` receives the canonical IR.
 | OpenAI Chat | `POST /v1/chat/completions`, Bearer key | `openai-chat`, `POST /{api_version}/chat/completions`, Bearer key |
 | OpenAI Responses | `POST /v1/responses`, Bearer key | `openai-responses`, `POST /{api_version}/responses`, Bearer key |
 | Anthropic Messages | `POST /v1/messages`, `x-api-key` plus `anthropic-version: 2023-06-01` | `anthropic`, `POST /v1/messages`, `x-api-key` plus configured version |
-| Gemini GenerateContent | `POST /v1beta/models/{qualified-model}:generateContent`, `x-goog-api-key` | `gemini`, `POST /{api_version}/models/{model}:generateContent`, `x-goog-api-key` |
+| Gemini GenerateContent | `POST /v1beta/models/{model-alias}:generateContent`, `x-goog-api-key` | `gemini`, `POST /{api_version}/models/{model}:generateContent`, `x-goog-api-key` |
 
 The implementations follow the official [OpenAI Responses migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses),
 [OpenAI function-calling guide](https://developers.openai.com/api/docs/guides/function-calling),

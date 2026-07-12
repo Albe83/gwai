@@ -56,13 +56,12 @@ spec:
       value: {{ .Values.dapr.stateStores.providers.redisDB | quote }}
     - name: actorStateStore
       value: "false"
-    # The provider registry is read by both data-plane edges. The component
-    # name prefix makes those app IDs address the same keys.
+    # The Model/Provider routing catalog is read by both data-plane edges. The
+    # component name prefix makes those app IDs address the same keys.
     - name: keyPrefix
       value: "name"
 scopes:
   - {{ include "gwai.controlPlaneName" . }}
-  - {{ include "gwai.virtualKeyControlPlaneName" . }}
   {{- range $gateway := .Values.gateways }}
   - {{ include "gwai.gatewayName" (dict "root" $ "gateway" $gateway) }}
   {{- end }}

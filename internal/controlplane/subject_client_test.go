@@ -17,6 +17,17 @@ func (i errorInvoker) InvokeJSON(context.Context, string, string, any, any) erro
 	return i.err
 }
 
+type captureInvoker struct {
+	appID   string
+	method  string
+	payload any
+}
+
+func (i *captureInvoker) InvokeJSON(_ context.Context, appID, method string, input, _ any) error {
+	i.appID, i.method, i.payload = appID, method, input
+	return nil
+}
+
 func TestRemoteSubjectRegistryMapsDomainErrors(t *testing.T) {
 	subject := KeySubject{UserID: "usr_test", Status: StatusDisabled, Revision: 2, Deleted: true}
 	tests := []struct {
@@ -46,7 +57,34 @@ func TestRemoteSubjectRegistryDoesNotExposeDaprRoutingFailuresAsDomainNotFound(t
 
 func TestRemoteSubjectRegistryRequiresConfiguration(t *testing.T) {
 	client := NewRemoteSubjectRegistry(nil, "")
-	if err := client.SyncSubject(context.Background(), KeySubject{}); err == nil {
-		t.Fatal("missing invoker and app ID must fail")
+	if err := client.SyncSubject(context.Background(), KeySubject{}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("missing invoker and app ID returned %v, want unavailable", err)
+	}
+}
+
+func TestRemoteSubjectRegistryInvokesModelProjectionEndpoints(t *testing.T) {
+	invoker := &captureInvoker{}
+	client := NewRemoteSubjectRegistry(invoker, "keys")
+	subject := ModelSubject{ModelID: "mdl_test", Alias: "model", Status: StatusActive, Revision: 1}
+	if err := client.SyncModel(context.Background(), subject); err != nil {
+		t.Fatal(err)
+	}
+	if invoker.appID != "keys" || invoker.method != "/internal/v1/model-subjects/sync" || invoker.payload != subject {
+		t.Fatalf("unexpected sync invocation: %+v", invoker)
+	}
+	subject.Status, subject.Deleted = StatusDisabled, true
+	if err := client.FenceModel(context.Background(), subject); err != nil {
+		t.Fatal(err)
+	}
+	if invoker.method != "/internal/v1/model-subjects/fence" || invoker.payload != subject {
+		t.Fatalf("unexpected fence invocation: %+v", invoker)
+	}
+}
+
+func TestRemoteSubjectRegistryMapsModelConflict(t *testing.T) {
+	client := NewRemoteSubjectRegistry(errorInvoker{err: &daprhttp.HTTPError{StatusCode: http.StatusConflict}}, "keys")
+	err := client.FenceModel(context.Background(), ModelSubject{})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected model conflict, got %v", err)
 	}
 }

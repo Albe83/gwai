@@ -58,19 +58,29 @@ type SubjectRegistry interface {
 	FenceSubject(context.Context, KeySubject) error
 }
 
-// ResourceService owns users and providers. It never reads or writes virtual
-// keys directly; user lifecycle changes are coordinated through SubjectRegistry.
+// ResourceService owns users, models and providers. It never reads or writes
+// virtual keys directly; authorization projections are coordinated through the
+// two narrow registry contracts.
 type ResourceService struct {
-	users     *UserRepository
-	providers *ProviderRepository
-	subjects  SubjectRegistry
-	now       func() time.Time
-	userMu    sync.Mutex
+	users         *UserRepository
+	providers     *ProviderRepository
+	models        *ModelRepository
+	subjects      SubjectRegistry
+	modelSubjects ModelRegistry
+	now           func() time.Time
+	userMu        sync.Mutex
+	modelMu       sync.Mutex
 }
 
-func NewResourceService(users *UserRepository, providers *ProviderRepository, subjects SubjectRegistry) *ResourceService {
+func NewResourceService(
+	users *UserRepository,
+	providers *ProviderRepository,
+	models *ModelRepository,
+	subjects SubjectRegistry,
+	modelSubjects ModelRegistry,
+) *ResourceService {
 	return &ResourceService{
-		users: users, providers: providers, subjects: subjects,
+		users: users, providers: providers, models: models, subjects: subjects, modelSubjects: modelSubjects,
 		now: func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -414,5 +424,5 @@ func (s *ResourceService) deleteProvider(ctx context.Context, id string, precond
 	if err := enforceIfMatch(precondition, provider); err != nil {
 		return err
 	}
-	return s.providers.DeleteProvider(ctx, provider)
+	return s.models.DeleteProviderIfNoModels(ctx, provider)
 }

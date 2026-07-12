@@ -44,17 +44,43 @@ type Provider struct {
 	UpdatedAt    time.Time          `json:"updated_at"`
 }
 
+// Model is the stable, client-facing routing resource between virtual-key
+// authorization and a concrete provider account. Alias is immutable after
+// creation; ProviderID and UpstreamModel may be changed through a full PUT.
+type Model struct {
+	ID            string    `json:"id"`
+	Alias         string    `json:"alias"`
+	ProviderID    string    `json:"provider_id"`
+	UpstreamModel string    `json:"upstream_model"`
+	Status        Status    `json:"status"`
+	Revision      uint64    `json:"revision"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// ModelSubject is the authorization projection owned by the virtual-key
+// service. It deliberately excludes provider routing data: gateways resolve
+// the canonical Model directly from provider state.
+type ModelSubject struct {
+	ModelID   string    `json:"model_id"`
+	Alias     string    `json:"alias"`
+	Status    Status    `json:"status"`
+	Revision  uint64    `json:"revision"`
+	Deleted   bool      `json:"deleted"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type VirtualKey struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	UserID        string     `json:"user_id"`
-	Prefix        string     `json:"prefix"`
-	KeyHash       string     `json:"key_hash"`
-	AllowedModels []string   `json:"allowed_models,omitempty"`
-	Status        Status     `json:"status"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	UserID    string     `json:"user_id"`
+	Prefix    string     `json:"prefix"`
+	KeyHash   string     `json:"key_hash"`
+	ModelIDs  []string   `json:"model_ids"`
+	Status    Status     `json:"status"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // KeySubject is the authorization projection for the user that owns one or
@@ -69,28 +95,28 @@ type KeySubject struct {
 }
 
 type PublicVirtualKey struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	UserID        string     `json:"user_id"`
-	Prefix        string     `json:"prefix"`
-	AllowedModels []string   `json:"allowed_models,omitempty"`
-	Status        Status     `json:"status"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	UserID    string     `json:"user_id"`
+	Prefix    string     `json:"prefix"`
+	ModelIDs  []string   `json:"model_ids"`
+	Status    Status     `json:"status"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 func (key VirtualKey) Public() PublicVirtualKey {
 	return PublicVirtualKey{
-		ID:            key.ID,
-		Name:          key.Name,
-		UserID:        key.UserID,
-		Prefix:        key.Prefix,
-		AllowedModels: append([]string(nil), key.AllowedModels...),
-		Status:        key.Status,
-		ExpiresAt:     key.ExpiresAt,
-		CreatedAt:     key.CreatedAt,
-		UpdatedAt:     key.UpdatedAt,
+		ID:        key.ID,
+		Name:      key.Name,
+		UserID:    key.UserID,
+		Prefix:    key.Prefix,
+		ModelIDs:  append([]string(nil), key.ModelIDs...),
+		Status:    key.Status,
+		ExpiresAt: key.ExpiresAt,
+		CreatedAt: key.CreatedAt,
+		UpdatedAt: key.UpdatedAt,
 	}
 }
 
@@ -105,8 +131,9 @@ type Authorization struct {
 }
 
 type Route struct {
-	QualifiedModel string `json:"qualified_model"`
-	ProviderID     string `json:"provider_id"`
-	UpstreamModel  string `json:"upstream_model"`
-	AdapterAppID   string `json:"adapter_app_id"`
+	ModelID       string `json:"model_id"`
+	Alias         string `json:"alias"`
+	ProviderID    string `json:"provider_id"`
+	UpstreamModel string `json:"upstream_model"`
+	AdapterAppID  string `json:"adapter_app_id"`
 }

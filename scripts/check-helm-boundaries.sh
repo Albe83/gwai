@@ -66,8 +66,8 @@ done
 grep -q '^  - gwai-control-plane$' <<<"$control"
 
 grep -q '^  - gwai-control-plane$' <<<"$providers"
-grep -q '^  - gwai-virtual-key-control-plane$' <<<"$providers"
 grep -q '^  - "gwai-anthropic"$' <<<"$providers"
+! grep -q '^  - gwai-virtual-key-control-plane$' <<<"$providers"
 ! grep -q 'gwai-admin-webui' <<<"$providers"
 
 grep -q '^  - gwai-virtual-key-control-plane$' <<<"$keys"
@@ -97,7 +97,7 @@ grep -q 'GWAI_PROVIDER_STATE_STORE' <<<"$resource_control"
 key_control=$(deployment_doc gwai-virtual-key-control-plane)
 grep -q 'type: Recreate' <<<"$key_control"
 grep -q 'GWAI_VIRTUAL_KEY_STATE_STORE' <<<"$key_control"
-grep -q 'GWAI_PROVIDER_STATE_STORE' <<<"$key_control"
+! grep -q 'GWAI_PROVIDER_STATE_STORE' <<<"$key_control"
 ! grep -q 'GWAI_CONTROL_STATE_STORE' <<<"$key_control"
 grep -q 'name: gwai-virtual-key-app-api-token' <<<"$key_control"
 ! grep -q 'name: gwai-app-api-token' <<<"$key_control"
@@ -148,8 +148,8 @@ grep -q '^          kind: Service$' <<<"$admin_route"
 grep -q '^          name: gwai-admin-webui$' <<<"$admin_route"
 grep -q '^          port: 8080$' <<<"$admin_route"
 
-# A custom retry policy must not turn domain 409 responses from subject fencing
-# into long retries and an upstream timeout.
+# A custom retry policy must not turn domain 409 responses from user/Model
+# fencing into long retries and an upstream timeout.
 resiliency=$(awk 'BEGIN { RS="---" } /kind: Resiliency/ { print }' "$render")
 ! grep -q '"gwai-virtual-key-control-plane":' <<<"$resiliency"
 ! grep -q 'gwai-admin-webui' <<<"$resiliency"
@@ -160,16 +160,20 @@ grep -q 'name: /v1/users$' <<<"$resource_ui_policy"
 grep -q 'name: /v1/users/\*$' <<<"$resource_ui_policy"
 grep -q 'name: /v1/providers$' <<<"$resource_ui_policy"
 grep -q 'name: /v1/providers/\*$' <<<"$resource_ui_policy"
-[[ $(grep -Fc 'httpVerb: ["GET", "POST", "PUT", "DELETE"]' <<<"$resource_ui_policy") -eq 2 ]]
-[[ $(grep -Fc 'httpVerb: ["GET", "PUT", "DELETE"]' <<<"$resource_ui_policy") -eq 2 ]]
-[[ $(grep -c 'action: allow' <<<"$resource_ui_policy") -eq 4 ]]
+grep -q 'name: /v1/models$' <<<"$resource_ui_policy"
+grep -q 'name: /v1/models/\*$' <<<"$resource_ui_policy"
+[[ $(grep -Fc 'httpVerb: ["GET", "POST", "PUT", "DELETE"]' <<<"$resource_ui_policy") -eq 3 ]]
+[[ $(grep -Fc 'httpVerb: ["GET", "PUT", "DELETE"]' <<<"$resource_ui_policy") -eq 3 ]]
+[[ $(grep -c 'action: allow' <<<"$resource_ui_policy") -eq 6 ]]
 ! grep -q '/internal/' <<<"$resource_ui_policy"
 
 key_configuration=$(configuration_doc gwai-virtual-key-control-plane)
 resource_subject_policy=$(policy_doc "$key_configuration" gwai-control-plane)
 grep -q 'name: /internal/v1/subjects/sync' <<<"$resource_subject_policy"
 grep -q 'name: /internal/v1/subjects/fence' <<<"$resource_subject_policy"
-[[ $(grep -c 'action: allow' <<<"$resource_subject_policy") -eq 2 ]]
+grep -q 'name: /internal/v1/model-subjects/sync' <<<"$resource_subject_policy"
+grep -q 'name: /internal/v1/model-subjects/fence' <<<"$resource_subject_policy"
+[[ $(grep -c 'action: allow' <<<"$resource_subject_policy") -eq 4 ]]
 
 key_ui_policy=$(policy_doc "$key_configuration" gwai-admin-webui)
 grep -q 'name: /v1/virtual-keys$' <<<"$key_ui_policy"

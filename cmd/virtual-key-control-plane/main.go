@@ -32,10 +32,7 @@ func run() error {
 	keys := controlplane.NewVirtualKeyRepository(daprhttp.NewStateStore(
 		daprClient, platform.Env("GWAI_VIRTUAL_KEY_STATE_STORE", "gwai-virtual-key-state"),
 	))
-	providers := controlplane.NewProviderRepository(daprhttp.NewStateStore(
-		daprClient, platform.Env("GWAI_PROVIDER_STATE_STORE", "gwai-provider-state"),
-	))
-	service := controlplane.NewVirtualKeyService(keys, providers)
+	service := controlplane.NewVirtualKeyService(keys)
 	handler := controlplane.NewVirtualKeyHTTPHandler(service, adminToken, appToken, maxBody, logger)
 
 	server := &http.Server{

@@ -27,8 +27,10 @@ func run() error {
 	daprPort := platform.Env("DAPR_HTTP_PORT", "3500")
 	daprClient := daprhttp.New("http://127.0.0.1:"+daprPort, os.Getenv("DAPR_API_TOKEN"), &http.Client{})
 	keys := controlplane.NewVirtualKeyRepository(daprhttp.NewStateStore(daprClient, platform.Env("GWAI_VIRTUAL_KEY_STATE_STORE", "gwai-virtual-key-state")))
-	providers := controlplane.NewProviderRepository(daprhttp.NewStateStore(daprClient, platform.Env("GWAI_PROVIDER_STATE_STORE", "gwai-provider-state")))
-	runtime := controlplane.NewGatewayRuntime(keys, providers)
+	providerStore := daprhttp.NewStateStore(daprClient, platform.Env("GWAI_PROVIDER_STATE_STORE", "gwai-provider-state"))
+	models := controlplane.NewModelRepository(providerStore)
+	providers := controlplane.NewProviderRepository(providerStore)
+	runtime := controlplane.NewGatewayRuntime(keys, models, providers)
 	handler := openairesponses.NewGatewayHTTPHandler(runtime, daprClient, maxBody, requestTimeout, logger)
 
 	server := &http.Server{

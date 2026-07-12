@@ -72,7 +72,10 @@ func TestConditionalDeleteServiceMethods(t *testing.T) {
 
 	t.Run("provider", func(t *testing.T) {
 		planes := newTestControlPlanes()
-		_, provider, _ := provisionTestRoute(t, planes)
+		_, provider, model := provisionTestRoute(t, planes)
+		if err := planes.resources.DeleteModel(t.Context(), model.ID); err != nil {
+			t.Fatal(err)
+		}
 		etag, err := entityETag(provider)
 		if err != nil {
 			t.Fatal(err)
@@ -87,9 +90,9 @@ func TestConditionalDeleteServiceMethods(t *testing.T) {
 
 	t.Run("virtual key", func(t *testing.T) {
 		planes := newTestControlPlanes()
-		user, _, qualifiedModel := provisionTestRoute(t, planes)
+		user, _, model := provisionTestRoute(t, planes)
 		created, err := planes.keys.CreateVirtualKey(t.Context(), VirtualKeyInput{
-			Name: "CLI", UserID: user.ID, AllowedModels: []string{qualifiedModel}, Status: StatusActive,
+			Name: "CLI", UserID: user.ID, ModelIDs: []string{model.ID}, Status: StatusActive,
 		})
 		if err != nil {
 			t.Fatal(err)

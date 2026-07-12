@@ -102,6 +102,11 @@ func NewResourceHTTPHandler(service *ResourceService, adminToken string, maxBody
 	mux.Handle("GET /v1/providers/{id}", handler.admin(http.HandlerFunc(handler.getProvider)))
 	mux.Handle("PUT /v1/providers/{id}", handler.admin(http.HandlerFunc(handler.updateProvider)))
 	mux.Handle("DELETE /v1/providers/{id}", handler.admin(http.HandlerFunc(handler.deleteProvider)))
+	mux.Handle("POST /v1/models", handler.admin(http.HandlerFunc(handler.createModel)))
+	mux.Handle("GET /v1/models", handler.admin(http.HandlerFunc(handler.listModels)))
+	mux.Handle("GET /v1/models/{id}", handler.admin(http.HandlerFunc(handler.getModel)))
+	mux.Handle("PUT /v1/models/{id}", handler.admin(http.HandlerFunc(handler.updateModel)))
+	mux.Handle("DELETE /v1/models/{id}", handler.admin(http.HandlerFunc(handler.deleteModel)))
 	return platform.HTTPMiddleware(logger, mux)
 }
 

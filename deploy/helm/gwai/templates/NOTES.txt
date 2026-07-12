@@ -13,8 +13,13 @@ Reach the APIs locally:
   kubectl -n {{ $.Release.Namespace }} port-forward service/{{ include "gwai.gatewayName" (dict "root" $ "gateway" $gateway) }} 8080:{{ $gateway.service.port }}
 {{ end }}
 
-Provider API keys are not Helm values. Create a Kubernetes Secret and reference
-its name/key when creating the provider in the control-plane API.
+Provider API keys are not Helm values. Create a Kubernetes Secret, create the
+matching Provider and Model through the control-plane API, then assign the
+Model ID to a virtual key.
+
+Pre-release upgrade notice: virtual keys now require Model IDs and synchronized
+Model subjects. This chart does not migrate qualified-string 0.x allowlists;
+reset and reprovision pre-release state before reusing an older Valkey volume.
 
 {{- if not .Values.adminWebUI.httpRoute.enabled }}
 

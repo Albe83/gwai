@@ -39,6 +39,12 @@ type API interface {
 	UpdateProvider(context.Context, string, controlplane.ProviderInput, string) (Versioned[controlplane.Provider], error)
 	DeleteProvider(context.Context, string, string) error
 
+	ListModels(context.Context) ([]controlplane.Model, error)
+	GetModel(context.Context, string) (Versioned[controlplane.Model], error)
+	CreateModel(context.Context, controlplane.ModelInput) (controlplane.Model, error)
+	UpdateModel(context.Context, string, controlplane.ModelInput, string) (Versioned[controlplane.Model], error)
+	DeleteModel(context.Context, string, string) error
+
 	ListVirtualKeys(context.Context) ([]controlplane.PublicVirtualKey, error)
 	GetVirtualKey(context.Context, string) (Versioned[controlplane.PublicVirtualKey], error)
 	CreateVirtualKey(context.Context, controlplane.VirtualKeyInput) (controlplane.CreatedVirtualKey, error)
@@ -275,6 +281,45 @@ func (c *DaprAPI) UpdateProvider(ctx context.Context, id string, input controlpl
 
 func (c *DaprAPI) DeleteProvider(ctx context.Context, id, ifMatch string) error {
 	_, err := c.invokeWithoutRetries(ctx, c.resourceAppID, http.MethodDelete, itemPath("providers", id), ifMatch, nil, nil)
+	return err
+}
+
+type modelsResponse struct {
+	Data []controlplane.Model `json:"data"`
+}
+
+func (c *DaprAPI) ListModels(ctx context.Context) ([]controlplane.Model, error) {
+	var result modelsResponse
+	_, err := c.invoke(ctx, c.resourceAppID, http.MethodGet, "/v1/models", "", nil, &result)
+	return result.Data, err
+}
+
+func (c *DaprAPI) GetModel(ctx context.Context, id string) (Versioned[controlplane.Model], error) {
+	var result controlplane.Model
+	etag, err := c.invoke(ctx, c.resourceAppID, http.MethodGet, itemPath("models", id), "", nil, &result)
+	if err == nil {
+		err = requireEntityTag(etag)
+	}
+	return Versioned[controlplane.Model]{Value: result, ETag: etag}, err
+}
+
+func (c *DaprAPI) CreateModel(ctx context.Context, input controlplane.ModelInput) (controlplane.Model, error) {
+	var result controlplane.Model
+	_, err := c.invokeWithoutRetries(ctx, c.resourceAppID, http.MethodPost, "/v1/models", "", input, &result)
+	return result, err
+}
+
+func (c *DaprAPI) UpdateModel(ctx context.Context, id string, input controlplane.ModelInput, ifMatch string) (Versioned[controlplane.Model], error) {
+	var result controlplane.Model
+	etag, err := c.invokeWithoutRetries(ctx, c.resourceAppID, http.MethodPut, itemPath("models", id), ifMatch, input, &result)
+	if err == nil {
+		err = requireEntityTag(etag)
+	}
+	return Versioned[controlplane.Model]{Value: result, ETag: etag}, err
+}
+
+func (c *DaprAPI) DeleteModel(ctx context.Context, id, ifMatch string) error {
+	_, err := c.invokeWithoutRetries(ctx, c.resourceAppID, http.MethodDelete, itemPath("models", id), ifMatch, nil, nil)
 	return err
 }
 

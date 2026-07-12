@@ -16,23 +16,22 @@ import (
 )
 
 type VirtualKeyInput struct {
-	Name          string     `json:"name"`
-	UserID        string     `json:"user_id"`
-	AllowedModels []string   `json:"allowed_models,omitempty"`
-	Status        Status     `json:"status,omitempty"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	Name      string     `json:"name"`
+	UserID    string     `json:"user_id"`
+	ModelIDs  []string   `json:"model_ids"`
+	Status    Status     `json:"status,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // VirtualKeyService is the sole application writer for the virtual-key store.
 // It also owns the minimal user projection consumed by gateway authorization.
 type VirtualKeyService struct {
-	keys      *VirtualKeyRepository
-	providers *ProviderRepository
-	now       func() time.Time
+	keys *VirtualKeyRepository
+	now  func() time.Time
 }
 
-func NewVirtualKeyService(keys *VirtualKeyRepository, providers *ProviderRepository) *VirtualKeyService {
-	return &VirtualKeyService{keys: keys, providers: providers, now: func() time.Time { return time.Now().UTC() }}
+func NewVirtualKeyService(keys *VirtualKeyRepository) *VirtualKeyService {
+	return &VirtualKeyService{keys: keys, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func hashKey(key string) string {
@@ -71,28 +70,34 @@ func (s *VirtualKeyService) normalizeInput(ctx context.Context, input VirtualKey
 	if input.ExpiresAt != nil && !input.ExpiresAt.After(s.now()) && input.Status == StatusActive {
 		return input, &ValidationError{Field: "expires_at", Message: "must be in the future for an active key"}
 	}
-	seen := make(map[string]struct{}, len(input.AllowedModels))
-	normalized := make([]string, 0, len(input.AllowedModels))
-	for _, value := range input.AllowedModels {
-		model, err := ParseQualifiedModel(value)
-		if err != nil {
-			return input, &ValidationError{Field: "allowed_models", Message: err.Error()}
+	seen := make(map[string]struct{}, len(input.ModelIDs))
+	normalized := make([]string, 0, len(input.ModelIDs))
+	for _, value := range input.ModelIDs {
+		modelID := strings.TrimSpace(value)
+		if modelID == "" {
+			return input, &ValidationError{Field: "model_ids", Message: "must not contain empty IDs"}
 		}
-		qualified := model.String()
-		if _, duplicate := seen[qualified]; duplicate {
+		if _, duplicate := seen[modelID]; duplicate {
 			continue
 		}
-		if _, err = s.providers.GetProviderBySlug(ctx, model.ProviderSlug); err != nil {
-			if errors.Is(err, ErrNotFound) {
-				return input, &ValidationError{Field: "allowed_models", Message: fmt.Sprintf("provider slug %q does not exist", model.ProviderSlug)}
+		model, err := s.keys.GetModelSubject(ctx, modelID)
+		if err != nil || model.Deleted {
+			if err == nil || errors.Is(err, ErrNotFound) {
+				return input, &ValidationError{Field: "model_ids", Message: fmt.Sprintf("model ID %q does not exist", modelID)}
 			}
 			return input, err
 		}
-		seen[qualified] = struct{}{}
-		normalized = append(normalized, qualified)
+		if input.Status == StatusActive && model.Status != StatusActive {
+			return input, &ValidationError{Field: "model_ids", Message: fmt.Sprintf("model ID %q is disabled", modelID)}
+		}
+		seen[modelID] = struct{}{}
+		normalized = append(normalized, modelID)
+	}
+	if len(normalized) == 0 {
+		return input, &ValidationError{Field: "model_ids", Message: "must contain at least one model ID"}
 	}
 	slices.Sort(normalized)
-	input.AllowedModels = normalized
+	input.ModelIDs = normalized
 	return input, nil
 }
 
@@ -112,7 +117,7 @@ func (s *VirtualKeyService) CreateVirtualKey(ctx context.Context, input VirtualK
 	now := s.now()
 	key := VirtualKey{
 		ID: id, Name: input.Name, UserID: input.UserID, Prefix: secret[:min(13, len(secret))],
-		KeyHash: hashKey(secret), AllowedModels: input.AllowedModels, Status: input.Status,
+		KeyHash: hashKey(secret), ModelIDs: input.ModelIDs, Status: input.Status,
 		ExpiresAt: input.ExpiresAt, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.keys.CreateVirtualKey(ctx, key); err != nil {
@@ -167,7 +172,7 @@ func (s *VirtualKeyService) updateVirtualKey(ctx context.Context, id string, inp
 	old := current
 	current.Name = input.Name
 	current.UserID = input.UserID
-	current.AllowedModels = input.AllowedModels
+	current.ModelIDs = input.ModelIDs
 	current.Status = input.Status
 	current.ExpiresAt = input.ExpiresAt
 	current.UpdatedAt = s.now()
@@ -207,4 +212,15 @@ func (s *VirtualKeyService) FenceSubject(ctx context.Context, subject KeySubject
 		return &ValidationError{Field: "deleted", Message: "must be true when fencing a subject"}
 	}
 	return s.keys.FenceSubject(ctx, subject)
+}
+
+func (s *VirtualKeyService) SyncModel(ctx context.Context, subject ModelSubject) error {
+	return s.keys.SyncModelSubject(ctx, subject)
+}
+
+func (s *VirtualKeyService) FenceModel(ctx context.Context, subject ModelSubject) error {
+	if !subject.Deleted {
+		return &ValidationError{Field: "deleted", Message: "must be true when fencing a model subject"}
+	}
+	return s.keys.FenceModelSubject(ctx, subject)
 }

@@ -247,10 +247,31 @@ func (s *server) deleteUser(w http.ResponseWriter, r *http.Request, session sess
 
 func (s *server) listProviders(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
 	data := s.basePage(session, "Providers", "providers")
-	providers, err := s.api.ListProviders(r.Context())
+	var providers []controlplane.Provider
+	var models []controlplane.Model
+	var err, modelErr error
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		providers, err = s.api.ListProviders(r.Context())
+	}()
+	go func() {
+		defer wait.Done()
+		models, modelErr = s.api.ListModels(r.Context())
+	}()
+	wait.Wait()
 	if err != nil {
 		s.renderOperationError(w, session, data, "providers", err)
 		return
+	}
+	data.RelationsAvailable = modelErr == nil
+	data.ProviderModelCounts = make(map[string]int)
+	for _, model := range models {
+		data.ProviderModelCounts[model.ProviderID]++
+	}
+	if modelErr != nil {
+		data.Warnings = append(data.Warnings, warningMessage("Model relationships are unavailable", modelErr))
 	}
 	data.Query = strings.TrimSpace(r.URL.Query().Get("q"))
 	query := strings.ToLower(data.Query)
@@ -357,9 +378,9 @@ func (s *server) confirmProviderStatus(w http.ResponseWriter, r *http.Request, s
 		s.renderOperationError(w, session, data, "error", err)
 		return
 	}
-	warning := "Enabling the provider makes its qualified models routable again."
+	warning := "Enabling the provider makes its active models routable again."
 	if status == string(controlplane.StatusDisabled) {
-		warning = "Disabling the provider immediately makes all of its qualified models unroutable."
+		warning = "Disabling the provider immediately makes all of its models unroutable."
 	}
 	data.Lifecycle = &lifecycleView{
 		Kind: "provider", Name: versioned.Value.Name, Status: status,
@@ -406,9 +427,23 @@ func (s *server) confirmDeleteProvider(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 	provider := versioned.Value
+	warning := "The provider can be deleted only when no model references it."
+	if models, modelErr := s.api.ListModels(r.Context()); modelErr == nil {
+		count := 0
+		for _, model := range models {
+			if model.ProviderID == provider.ID {
+				count++
+			}
+		}
+		if count > 0 {
+			warning = fmt.Sprintf("This provider still owns %d model(s). Delete or reassign every model before deleting the provider.", count)
+		}
+	} else {
+		data.Warnings = append(data.Warnings, warningMessage("Could not inspect model relationships", modelErr))
+	}
 	data.Confirm = &confirmView{
 		Kind: "provider", Name: provider.Name, Action: "/providers/" + provider.ID + "/delete",
-		Cancel: "/providers", Warning: "Existing virtual-key allowlists are not rewritten. Qualified models using this slug will become unroutable.", ETag: versioned.ETag,
+		Cancel: "/providers", Warning: warning, ETag: versioned.ETag,
 	}
 	s.views.render(w, http.StatusOK, "confirm-delete", data)
 }
@@ -429,25 +464,287 @@ func (s *server) deleteProvider(w http.ResponseWriter, r *http.Request, session 
 		s.renderOperationError(w, session, data, "confirm-delete", err)
 		return
 	}
-	s.flashRedirect(w, r, session, "/providers", "success", "Provider deleted. Referencing model names are now unroutable.")
+	s.flashRedirect(w, r, session, "/providers", "success", "Provider deleted.")
+}
+
+func (s *server) modelReferenceData(ctx *http.Request, data *pageData) {
+	providers, err := s.api.ListProviders(ctx.Context())
+	data.Providers = providers
+	data.ProviderNames = make(map[string]string, len(providers))
+	for _, provider := range providers {
+		data.ProviderNames[provider.ID] = provider.Name
+	}
+	if err != nil {
+		data.Warnings = append(data.Warnings, warningMessage("Provider choices are unavailable", err))
+	}
+	slices.SortFunc(data.Providers, func(left, right controlplane.Provider) int {
+		return cmp.Or(strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name)), strings.Compare(left.ID, right.ID))
+	})
+}
+
+func (s *server) listModels(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
+	data := s.basePage(session, "Models", "models")
+	var models []controlplane.Model
+	var providers []controlplane.Provider
+	var keys []controlplane.PublicVirtualKey
+	var err, providerErr, keyErr error
+	var wait sync.WaitGroup
+	wait.Add(3)
+	go func() {
+		defer wait.Done()
+		models, err = s.api.ListModels(r.Context())
+	}()
+	go func() {
+		defer wait.Done()
+		providers, providerErr = s.api.ListProviders(r.Context())
+	}()
+	go func() {
+		defer wait.Done()
+		keys, keyErr = s.api.ListVirtualKeys(r.Context())
+	}()
+	wait.Wait()
+	if err != nil {
+		s.renderOperationError(w, session, data, "models", err)
+		return
+	}
+	data.ProviderNames = make(map[string]string, len(providers))
+	for _, provider := range providers {
+		data.ProviderNames[provider.ID] = provider.Name
+	}
+	data.ModelKeyCounts = make(map[string]int)
+	for _, key := range keys {
+		for _, modelID := range key.ModelIDs {
+			data.ModelKeyCounts[modelID]++
+		}
+	}
+	data.RelationsAvailable = providerErr == nil && keyErr == nil
+	if providerErr != nil {
+		data.Warnings = append(data.Warnings, warningMessage("Provider names are unavailable", providerErr))
+	}
+	if keyErr != nil {
+		data.Warnings = append(data.Warnings, warningMessage("Virtual-key relationships are unavailable", keyErr))
+	}
+	data.Query = strings.TrimSpace(r.URL.Query().Get("q"))
+	query := strings.ToLower(data.Query)
+	data.StatusFilter = strings.TrimSpace(r.URL.Query().Get("status"))
+	data.ProviderFilter = strings.TrimSpace(r.URL.Query().Get("provider_id"))
+	data.Providers = providers
+	slices.SortFunc(data.Providers, func(left, right controlplane.Provider) int {
+		return cmp.Or(strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name)), strings.Compare(left.ID, right.ID))
+	})
+	for _, model := range models {
+		searchable := model.Alias + " " + model.UpstreamModel + " " + model.ID + " " + model.ProviderID + " " + data.ProviderNames[model.ProviderID]
+		if query != "" && !strings.Contains(strings.ToLower(searchable), query) {
+			continue
+		}
+		if data.StatusFilter != "" && string(model.Status) != data.StatusFilter {
+			continue
+		}
+		if data.ProviderFilter != "" && model.ProviderID != data.ProviderFilter {
+			continue
+		}
+		data.Models = append(data.Models, model)
+	}
+	slices.SortFunc(data.Models, func(left, right controlplane.Model) int {
+		return cmp.Or(strings.Compare(strings.ToLower(left.Alias), strings.ToLower(right.Alias)), strings.Compare(left.ID, right.ID))
+	})
+	s.views.render(w, http.StatusOK, "models", data)
+}
+
+func (s *server) newModel(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
+	data := s.basePage(session, "Create model", "models")
+	data.ModelForm = &modelForm{Status: string(controlplane.StatusActive)}
+	s.modelReferenceData(r, &data)
+	s.views.render(w, http.StatusOK, "model-form", data)
+}
+
+func modelFormFromRequest(r *http.Request) modelForm {
+	return modelForm{
+		Alias: formString(r, "alias"), ProviderID: formString(r, "provider_id"),
+		UpstreamModel: formString(r, "upstream_model"), Status: statusValue(r.PostForm.Get("status")),
+	}
+}
+
+func (s *server) createModel(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
+	if !s.parseProtectedForm(w, r, session) {
+		return
+	}
+	form := modelFormFromRequest(r)
+	if !validLifecycleStatus(form.Status) {
+		data := s.basePage(session, "Create model", "models")
+		data.ModelForm = &form
+		s.modelReferenceData(r, &data)
+		s.renderInvalidForm(w, data, "model-form", "Status must be active or disabled.")
+		return
+	}
+	if _, err := s.api.CreateModel(r.Context(), form.input()); err != nil {
+		data := s.basePage(session, "Create model", "models")
+		data.ModelForm = &form
+		s.modelReferenceData(r, &data)
+		s.renderOperationError(w, session, data, "model-form", err)
+		return
+	}
+	s.flashRedirect(w, r, session, "/models", "success", "Model created.")
+}
+
+func (s *server) editModel(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
+	versioned, err := s.api.GetModel(r.Context(), r.PathValue("id"))
+	data := s.basePage(session, "Edit model", "models")
+	if err != nil {
+		s.renderOperationError(w, session, data, "error", err)
+		return
+	}
+	model := versioned.Value
+	form := modelFormFromModel(model)
+	data.ModelForm, data.Editing, data.ResourceID, data.ResourceETag = &form, true, model.ID, versioned.ETag
+	s.modelReferenceData(r, &data)
+	s.views.render(w, http.StatusOK, "model-form", data)
+}
+
+func (s *server) updateModel(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
+	if !s.parseProtectedForm(w, r, session) {
+		return
+	}
+	id, etag := r.PathValue("id"), formString(r, "_etag")
+	form := modelFormFromRequest(r)
+	if etag == "" || !validLifecycleStatus(form.Status) {
+		data := s.basePage(session, "Edit model", "models")
+		data.ModelForm, data.Editing, data.ResourceID, data.ResourceETag = &form, true, id, etag
+		s.modelReferenceData(r, &data)
+		s.renderInvalidForm(w, data, "model-form", "A current resource version and an active or disabled status are required. Reload the edit page and try again.")
+		return
+	}
+	if _, err := s.api.UpdateModel(r.Context(), id, form.input(), etag); err != nil {
+		data := s.basePage(session, "Edit model", "models")
+		data.ModelForm, data.Editing, data.ResourceID, data.ResourceETag = &form, true, id, etag
+		s.modelReferenceData(r, &data)
+		s.renderOperationError(w, session, data, "model-form", err)
+		return
+	}
+	s.flashRedirect(w, r, session, "/models", "success", "Model updated.")
+}
+
+func (s *server) confirmModelStatus(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
+	status := strings.TrimSpace(r.URL.Query().Get("to"))
+	if !validLifecycleStatus(status) {
+		s.renderSimpleError(w, session, http.StatusBadRequest, "Invalid status", "Status must be active or disabled.")
+		return
+	}
+	versioned, err := s.api.GetModel(r.Context(), r.PathValue("id"))
+	data := s.basePage(session, "Change model status", "models")
+	if err != nil {
+		s.renderOperationError(w, session, data, "error", err)
+		return
+	}
+	warning := "Enabling the model makes it routable for active virtual keys that reference it."
+	if status == string(controlplane.StatusDisabled) {
+		warning = "Disabling the model immediately makes it unroutable for every virtual key."
+	}
+	data.Lifecycle = &lifecycleView{
+		Kind: "model", Name: versioned.Value.Alias, Status: status,
+		Action: "/models/" + versioned.Value.ID + "/status", Cancel: "/models",
+		Warning: warning, ButtonText: strings.ToUpper(status[:1]) + status[1:] + " model", ETag: versioned.ETag,
+	}
+	s.views.render(w, http.StatusOK, "confirm-status", data)
+}
+
+func (s *server) changeModelStatus(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
+	if !s.parseProtectedForm(w, r, session) {
+		return
+	}
+	status, etag := formString(r, "status"), formString(r, "_etag")
+	if !validLifecycleStatus(status) || etag == "" {
+		s.renderSimpleError(w, session, http.StatusBadRequest, "Invalid status", "A current resource version and an active or disabled status are required. Reload the confirmation page and try again.")
+		return
+	}
+	id := r.PathValue("id")
+	versioned, err := s.api.GetModel(r.Context(), id)
+	if err == nil {
+		input := modelFormFromModel(versioned.Value).input()
+		input.Status = controlplane.Status(status)
+		_, err = s.api.UpdateModel(r.Context(), id, input, etag)
+	}
+	if err != nil {
+		data := s.basePage(session, "Change model status", "models")
+		s.renderOperationError(w, session, data, "error", err)
+		return
+	}
+	message := "Model enabled."
+	if status == string(controlplane.StatusDisabled) {
+		message = "Model disabled and unroutable."
+	}
+	s.flashRedirect(w, r, session, "/models", "success", message)
+}
+
+func (s *server) confirmDeleteModel(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
+	versioned, err := s.api.GetModel(r.Context(), r.PathValue("id"))
+	data := s.basePage(session, "Delete model", "models")
+	if err != nil {
+		s.renderOperationError(w, session, data, "error", err)
+		return
+	}
+	model := versioned.Value
+	warning := "The model can be deleted only when no virtual key references it."
+	if keys, keyErr := s.api.ListVirtualKeys(r.Context()); keyErr == nil {
+		count := 0
+		for _, key := range keys {
+			if slices.Contains(key.ModelIDs, model.ID) {
+				count++
+			}
+		}
+		if count > 0 {
+			warning = fmt.Sprintf("This model is still referenced by %d virtual key(s). Remove it from every key before deleting the model.", count)
+		}
+	} else {
+		data.Warnings = append(data.Warnings, warningMessage("Could not inspect virtual-key relationships", keyErr))
+	}
+	data.Confirm = &confirmView{
+		Kind: "model", Name: model.Alias, Action: "/models/" + model.ID + "/delete",
+		Cancel: "/models", Warning: warning, ETag: versioned.ETag,
+	}
+	s.views.render(w, http.StatusOK, "confirm-delete", data)
+}
+
+func (s *server) deleteModel(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
+	if !s.parseProtectedForm(w, r, session) {
+		return
+	}
+	id, etag := r.PathValue("id"), formString(r, "_etag")
+	if etag == "" {
+		s.renderSimpleError(w, session, http.StatusBadRequest, "Invalid deletion", "The resource version is missing. Reload the confirmation page and try again.")
+		return
+	}
+	if err := s.api.DeleteModel(r.Context(), id, etag); err != nil {
+		data := s.basePage(session, "Delete model", "models")
+		data.Confirm = &confirmView{Kind: "model", Name: id, Action: "/models/" + id + "/delete", Cancel: "/models", Warning: "The model was not deleted.", ETag: etag}
+		s.renderOperationError(w, session, data, "confirm-delete", err)
+		return
+	}
+	s.flashRedirect(w, r, session, "/models", "success", "Model deleted.")
 }
 
 func (s *server) keyReferenceData(ctx *http.Request, data *pageData) {
 	var users []controlplane.User
+	var models []controlplane.Model
 	var providers []controlplane.Provider
-	var userErr, providerErr error
+	var userErr, modelErr, providerErr error
 	var wait sync.WaitGroup
-	wait.Add(2)
+	wait.Add(3)
 	go func() {
 		defer wait.Done()
 		users, userErr = s.api.ListUsers(ctx.Context())
 	}()
 	go func() {
 		defer wait.Done()
+		models, modelErr = s.api.ListModels(ctx.Context())
+	}()
+	go func() {
+		defer wait.Done()
 		providers, providerErr = s.api.ListProviders(ctx.Context())
 	}()
 	wait.Wait()
-	data.Users, data.Providers = users, providers
+	data.Users, data.Models, data.Providers = users, models, providers
+	data.UserChoicesAvailable, data.ModelChoicesAvailable = userErr == nil, modelErr == nil
 	data.UserNames = make(map[string]string, len(users))
 	for _, user := range users {
 		data.UserNames[user.ID] = user.Name
@@ -455,22 +752,37 @@ func (s *server) keyReferenceData(ctx *http.Request, data *pageData) {
 	if userErr != nil {
 		data.Warnings = append(data.Warnings, warningMessage("User choices are unavailable", userErr))
 	}
+	data.ModelNames = make(map[string]string, len(models))
+	for _, model := range models {
+		data.ModelNames[model.ID] = model.Alias
+	}
+	data.ProviderNames = make(map[string]string, len(providers))
+	for _, provider := range providers {
+		data.ProviderNames[provider.ID] = provider.Name
+	}
+	if modelErr != nil {
+		data.Warnings = append(data.Warnings, warningMessage("Model choices are unavailable", modelErr))
+	}
 	if providerErr != nil {
-		data.Warnings = append(data.Warnings, warningMessage("Provider suggestions are unavailable", providerErr))
+		data.Warnings = append(data.Warnings, warningMessage("Provider names are unavailable", providerErr))
 	}
 	slices.SortFunc(data.Users, func(left, right controlplane.User) int {
 		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
 	})
 	slices.SortFunc(data.Providers, func(left, right controlplane.Provider) int { return strings.Compare(left.Slug, right.Slug) })
+	slices.SortFunc(data.Models, func(left, right controlplane.Model) int {
+		return cmp.Or(strings.Compare(strings.ToLower(left.Alias), strings.ToLower(right.Alias)), strings.Compare(left.ID, right.ID))
+	})
 }
 
 func (s *server) listVirtualKeys(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
 	data := s.basePage(session, "Virtual keys", "virtual-keys")
 	var keys []controlplane.PublicVirtualKey
 	var users []controlplane.User
-	var err, userErr error
+	var models []controlplane.Model
+	var err, userErr, modelErr error
 	var wait sync.WaitGroup
-	wait.Add(2)
+	wait.Add(3)
 	go func() {
 		defer wait.Done()
 		keys, err = s.api.ListVirtualKeys(r.Context())
@@ -478,6 +790,10 @@ func (s *server) listVirtualKeys(w http.ResponseWriter, r *http.Request, session
 	go func() {
 		defer wait.Done()
 		users, userErr = s.api.ListUsers(r.Context())
+	}()
+	go func() {
+		defer wait.Done()
+		models, modelErr = s.api.ListModels(r.Context())
 	}()
 	wait.Wait()
 	if err != nil {
@@ -495,19 +811,35 @@ func (s *server) listVirtualKeys(w http.ResponseWriter, r *http.Request, session
 	if userErr != nil {
 		data.Warnings = append(data.Warnings, warningMessage("User names are unavailable", userErr))
 	}
+	data.ModelNames = make(map[string]string, len(models))
+	for _, model := range models {
+		data.ModelNames[model.ID] = model.Alias
+	}
+	data.Models = models
+	if modelErr != nil {
+		data.Warnings = append(data.Warnings, warningMessage("Model names are unavailable", modelErr))
+	}
 	data.Query = strings.TrimSpace(r.URL.Query().Get("q"))
 	query := strings.ToLower(data.Query)
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
-	data.StatusFilter, data.UserFilter = status, userID
+	modelID := strings.TrimSpace(r.URL.Query().Get("model_id"))
+	data.StatusFilter, data.UserFilter, data.ModelFilter = status, userID, modelID
 	for _, key := range keys {
-		if query != "" && !strings.Contains(strings.ToLower(key.Name+" "+key.Prefix+" "+key.ID+" "+key.UserID+" "+data.UserNames[key.UserID]), query) {
+		modelSearch := ""
+		for _, id := range key.ModelIDs {
+			modelSearch += " " + id + " " + data.ModelNames[id]
+		}
+		if query != "" && !strings.Contains(strings.ToLower(key.Name+" "+key.Prefix+" "+key.ID+" "+key.UserID+" "+data.UserNames[key.UserID]+modelSearch), query) {
 			continue
 		}
 		if status != "" && string(key.Status) != status {
 			continue
 		}
 		if userID != "" && key.UserID != userID {
+			continue
+		}
+		if modelID != "" && !slices.Contains(key.ModelIDs, modelID) {
 			continue
 		}
 		data.VirtualKeys = append(data.VirtualKeys, key)
@@ -543,10 +875,16 @@ func (s *server) refreshKeyCreationForm(w http.ResponseWriter, r *http.Request, 
 }
 
 func virtualKeyFormFromRequest(r *http.Request) virtualKeyForm {
+	modelIDs := make([]string, 0, len(r.PostForm["model_ids"]))
+	for _, modelID := range r.PostForm["model_ids"] {
+		modelID = strings.TrimSpace(modelID)
+		if modelID != "" && !slices.Contains(modelIDs, modelID) {
+			modelIDs = append(modelIDs, modelID)
+		}
+	}
 	return virtualKeyForm{
 		Name: formString(r, "name"), UserID: formString(r, "user_id"),
-		AllowedModels: strings.TrimSpace(r.PostForm.Get("allowed_models")),
-		Status:        statusValue(r.PostForm.Get("status")), ExpiresAt: formString(r, "expires_at"),
+		ModelIDs: modelIDs, Status: statusValue(r.PostForm.Get("status")), ExpiresAt: formString(r, "expires_at"),
 	}
 }
 
@@ -672,7 +1010,7 @@ func (s *server) confirmVirtualKeyStatus(w http.ResponseWriter, r *http.Request,
 		s.renderOperationError(w, session, data, "error", err)
 		return
 	}
-	warning := "Enabling the key restores authorization only when its owner and provider routes are active and it has not expired."
+	warning := "Enabling the key restores authorization only when its owner, selected models and provider routes are active and it has not expired."
 	if status == string(controlplane.StatusDisabled) {
 		warning = "Disabling the key revokes this credential immediately."
 	}

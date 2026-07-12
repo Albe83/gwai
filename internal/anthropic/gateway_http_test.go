@@ -72,7 +72,7 @@ func gatewayTestHandler(runtime *gatewayRuntime, invoker *gatewayInvoker) http.H
 
 func TestGatewayHTTPHandlerCreatesAnthropicMessage(t *testing.T) {
 	runtime := &gatewayRuntime{route: controlplane.Route{
-		QualifiedModel: "team/claude", ProviderID: "prv_1", UpstreamModel: "claude-sonnet", AdapterAppID: "adapter-1",
+		ModelID: "mdl_1", Alias: "team-claude", ProviderID: "prv_1", UpstreamModel: "claude-sonnet", AdapterAppID: "adapter-1",
 	}}
 	invoker := &gatewayInvoker{result: ir.Response{
 		Version: ir.Version, ID: "req_internal", Model: "claude-sonnet",

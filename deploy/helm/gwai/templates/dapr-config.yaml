@@ -41,6 +41,12 @@ spec:
           - name: /v1/providers/*
             httpVerb: ["GET", "PUT", "DELETE"]
             action: allow
+          - name: /v1/models
+            httpVerb: ["GET", "POST", "PUT", "DELETE"]
+            action: allow
+          - name: /v1/models/*
+            httpVerb: ["GET", "PUT", "DELETE"]
+            action: allow
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
@@ -72,6 +78,12 @@ spec:
             httpVerb: ["POST"]
             action: allow
           - name: /internal/v1/subjects/fence
+            httpVerb: ["POST"]
+            action: allow
+          - name: /internal/v1/model-subjects/sync
+            httpVerb: ["POST"]
+            action: allow
+          - name: /internal/v1/model-subjects/fence
             httpVerb: ["POST"]
             action: allow
       - appId: {{ include "gwai.adminWebUIName" . }}

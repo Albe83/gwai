@@ -34,6 +34,8 @@ user_name=""
 user_email=""
 user_id=""
 provider_id=""
+model_id=""
+model_alias=""
 key_id=""
 independent_key_id=""
 independent_key_name=""
@@ -41,9 +43,11 @@ independent_provider_id=""
 independent_provider_slug=""
 ui_user_id=""
 ui_provider_id=""
+ui_model_id=""
 ui_key_id=""
 ui_user_email=""
 ui_provider_slug=""
+ui_model_alias=""
 ui_key_name=""
 ui_key_name_updated=""
 control_replicas=""
@@ -175,6 +179,14 @@ cleanup() {
       ui_provider_id=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/providers" -H "Authorization: Bearer ${admin_token}" \
         | jq -r --arg slug "$ui_provider_slug" '.data | map(select(.slug == $slug)) | first | .id // empty')
     fi
+    if [[ -z "$ui_model_id" && -n "$ui_model_alias" ]]; then
+      ui_model_id=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/models" -H "Authorization: Bearer ${admin_token}" \
+        | jq -r --arg alias "$ui_model_alias" '.data | map(select(.alias == $alias)) | first | .id // empty')
+    fi
+    if [[ -z "$model_id" && -n "$model_alias" ]]; then
+      model_id=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/models" -H "Authorization: Bearer ${admin_token}" \
+        | jq -r --arg alias "$model_alias" '.data | map(select(.alias == $alias)) | first | .id // empty')
+    fi
     if [[ -z "$independent_provider_id" && -n "$independent_provider_slug" ]]; then
       independent_provider_id=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/providers" -H "Authorization: Bearer ${admin_token}" \
         | jq -r --arg slug "$independent_provider_slug" '.data | map(select(.slug == $slug)) | first | .id // empty')
@@ -186,6 +198,8 @@ cleanup() {
     [[ -n "$ui_key_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys/${ui_key_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
     [[ -n "$independent_key_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys/${independent_key_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
     [[ -n "$key_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys/${key_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
+    [[ -n "$ui_model_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/models/${ui_model_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
+    [[ -n "$model_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/models/${model_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
     [[ -n "$ui_provider_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/providers/${ui_provider_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
     [[ -n "$independent_provider_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/providers/${independent_provider_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
     [[ -n "$provider_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/providers/${provider_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
@@ -232,7 +246,8 @@ provider_scopes=$(kubectl -n "$NAMESPACE" get component.dapr.io gwai-provider-st
 key_scopes=$(kubectl -n "$NAMESPACE" get component.dapr.io gwai-virtual-key-state -o jsonpath='{.scopes[*]}')
 [[ " $control_scopes " == *" ${RELEASE}-control-plane "* ]]
 [[ " $control_scopes " != *" ${RELEASE}-openai-gateway "* ]]
-[[ " $provider_scopes " == *" ${RELEASE}-control-plane "* && " $provider_scopes " == *" ${RELEASE}-virtual-key-control-plane "* && " $provider_scopes " == *" ${ADAPTER_APP_ID} "* ]]
+[[ " $provider_scopes " == *" ${RELEASE}-control-plane "* && " $provider_scopes " == *" ${ADAPTER_APP_ID} "* ]]
+[[ " $provider_scopes " != *" ${RELEASE}-virtual-key-control-plane "* ]]
 [[ " $key_scopes " == *" ${RELEASE}-virtual-key-control-plane "* && " $key_scopes " == *" ${RELEASE}-openai-gateway "* ]]
 [[ " $key_scopes " != *" ${RELEASE}-control-plane "* && " $key_scopes " != *" ${ADAPTER_APP_ID} "* ]]
 [[ " $control_scopes $provider_scopes $key_scopes " != *" ${RELEASE}-admin-webui "* ]]
@@ -445,8 +460,58 @@ for lifecycle_status in disabled active; do
     | jq -e --arg status "$lifecycle_status" '.status == $status' >/dev/null
 done
 
+ui_model_alias="ui-model-${RUN_ID}"
+ui_upstream_model="upstream-ui-${RUN_ID}"
+curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-new-model.html" "$ui_base/models/new"
+grep -Fq 'action="/models"' "$TMP_DIR/ui-new-model.html"
+ui_model_create_csrf=$(hidden_input_value "$TMP_DIR/ui-new-model.html" _csrf)
+[[ -n "$ui_model_create_csrf" ]] || { echo "WebUI new-model form lacks CSRF" >&2; exit 1; }
+status=$(curl -sS -b "$ui_cookie_jar" -D "$TMP_DIR/ui-create-model.headers" -o "$TMP_DIR/ui-create-model.body" -w '%{http_code}' \
+  -X POST "$ui_base/models" --data-urlencode "_csrf=${ui_model_create_csrf}" \
+  --data-urlencode "alias=${ui_model_alias}" --data-urlencode "provider_id=${ui_provider_id}" \
+  --data-urlencode "upstream_model=${ui_upstream_model}" --data-urlencode 'status=active')
+[[ "$status" == 303 ]] || { echo "WebUI model creation failed ($status)" >&2; exit 1; }
+grep -Eiq '^location: /models' "$TMP_DIR/ui-create-model.headers"
+ui_model_id=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/models" -H "Authorization: Bearer ${admin_token}" \
+  | jq -er --arg alias "$ui_model_alias" '.data | map(select(.alias == $alias)) | first | .id')
+curl -fsS -b "$ui_cookie_jar" -G --data-urlencode "q=${ui_model_alias}" --data-urlencode 'status=active' \
+  --data-urlencode "provider_id=${ui_provider_id}" -o "$TMP_DIR/ui-filter-models.html" "$ui_base/models"
+grep -Fq "href=\"/models/${ui_model_id}/edit\"" "$TMP_DIR/ui-filter-models.html"
+curl -fsS -b "$ui_cookie_jar" -G --data-urlencode "q=missing-${RUN_ID}" --data-urlencode 'status=active' \
+  --data-urlencode "provider_id=${ui_provider_id}" -o "$TMP_DIR/ui-filter-models-miss.html" "$ui_base/models"
+if grep -Fq "href=\"/models/${ui_model_id}/edit\"" "$TMP_DIR/ui-filter-models-miss.html"; then
+  echo "WebUI model search filter retained a nonmatching row" >&2
+  exit 1
+fi
+
+curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-edit-model.html" "$ui_base/models/${ui_model_id}/edit"
+ui_model_csrf=$(hidden_input_value "$TMP_DIR/ui-edit-model.html" _csrf)
+ui_model_etag=$(hidden_input_value "$TMP_DIR/ui-edit-model.html" _etag)
+[[ -n "$ui_model_csrf" && -n "$ui_model_etag" ]] || { echo "WebUI model edit form lacks CSRF or ETag" >&2; exit 1; }
+ui_upstream_model_updated="upstream-ui-updated-${RUN_ID}"
+status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-update-model.body" -w '%{http_code}' \
+  -X POST "$ui_base/models/${ui_model_id}" --data-urlencode "_csrf=${ui_model_csrf}" --data-urlencode "_etag=${ui_model_etag}" \
+  --data-urlencode "alias=${ui_model_alias}" --data-urlencode "provider_id=${ui_provider_id}" \
+  --data-urlencode "upstream_model=${ui_upstream_model_updated}" --data-urlencode 'status=active')
+[[ "$status" == 303 ]] || { echo "WebUI model update failed ($status)" >&2; exit 1; }
+curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/models/${ui_model_id}" -H "Authorization: Bearer ${admin_token}" \
+  | jq -e --arg upstream "$ui_upstream_model_updated" '.upstream_model == $upstream and .revision >= 2' >/dev/null
+for lifecycle_status in disabled active; do
+	curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-model-status-${lifecycle_status}.html" \
+	  "$ui_base/models/${ui_model_id}/status?to=${lifecycle_status}"
+	grep -Fq 'Review the impact' "$TMP_DIR/ui-model-status-${lifecycle_status}.html"
+	lifecycle_csrf=$(hidden_input_value "$TMP_DIR/ui-model-status-${lifecycle_status}.html" _csrf)
+	lifecycle_etag=$(hidden_input_value "$TMP_DIR/ui-model-status-${lifecycle_status}.html" _etag)
+	[[ -n "$lifecycle_csrf" && -n "$lifecycle_etag" ]] || { echo "WebUI model status confirmation lacks CSRF or ETag" >&2; exit 1; }
+  status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-model-status-${lifecycle_status}.body" -w '%{http_code}' \
+	  -X POST "$ui_base/models/${ui_model_id}/status" --data-urlencode "_csrf=${lifecycle_csrf}" \
+	  --data-urlencode "_etag=${lifecycle_etag}" --data-urlencode "status=${lifecycle_status}")
+  [[ "$status" == 303 ]] || { echo "WebUI model ${lifecycle_status} lifecycle failed ($status)" >&2; exit 1; }
+  curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/models/${ui_model_id}" -H "Authorization: Bearer ${admin_token}" \
+    | jq -e --arg status "$lifecycle_status" '.status == $status' >/dev/null
+done
+
 ui_key_name="WebUI key ${RUN_ID}"
-ui_qualified_model="${ui_provider_slug}/e2e-model"
 curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-new-key.html" "$ui_base/virtual-keys/new"
 ui_key_csrf=$(hidden_input_value "$TMP_DIR/ui-new-key.html" _csrf)
 ui_operation=$(hidden_input_value "$TMP_DIR/ui-new-key.html" _operation)
@@ -454,7 +519,7 @@ ui_operation=$(hidden_input_value "$TMP_DIR/ui-new-key.html" _operation)
 status=$(curl -sS -b "$ui_cookie_jar" -D "$TMP_DIR/ui-create-key.headers" -o "$TMP_DIR/ui-create-key.body" -w '%{http_code}' \
 	-X POST "$ui_base/virtual-keys" --data-urlencode "_csrf=${ui_key_csrf}" --data-urlencode "_operation=${ui_operation}" \
   --data-urlencode "name=${ui_key_name}" --data-urlencode "user_id=${ui_user_id}" \
-  --data-urlencode "allowed_models=${ui_qualified_model}" --data-urlencode 'status=active')
+  --data-urlencode "model_ids=${ui_model_id}" --data-urlencode 'status=active')
 [[ "$status" == 201 ]] || { echo "WebUI virtual-key creation failed ($status)" >&2; exit 1; }
 ui_key_id=$(curl -fsS "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys" -H "Authorization: Bearer ${admin_token}" \
   | jq -er --arg name "$ui_key_name" '.data | map(select(.name == $name)) | first | .id')
@@ -468,7 +533,7 @@ fi
 status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-key-resubmit.html" -w '%{http_code}' \
 	-X POST "$ui_base/virtual-keys" --data-urlencode "_csrf=${ui_key_csrf}" --data-urlencode "_operation=${ui_operation}" \
 	--data-urlencode "name=${ui_key_name}" --data-urlencode "user_id=${ui_user_id}" \
-	--data-urlencode "allowed_models=${ui_qualified_model}" --data-urlencode 'status=active')
+	--data-urlencode "model_ids=${ui_model_id}" --data-urlencode 'status=active')
 [[ "$status" == 409 ]] || { echo "WebUI reused a consumed key-creation form ($status)" >&2; exit 1; }
 if grep -Eq 'gwai_[A-Za-z0-9_-]{40,}' "$TMP_DIR/ui-key-resubmit.html"; then
   echo "WebUI repeated a one-time key secret" >&2
@@ -521,10 +586,16 @@ ui_key_name_updated="WebUI key updated ${RUN_ID}"
 status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-update-key.body" -w '%{http_code}' \
 	-X POST "$ui_base/virtual-keys/${ui_key_id}" --data-urlencode "_csrf=${ui_key_edit_csrf}" --data-urlencode "_etag=${ui_key_etag}" \
   --data-urlencode "name=${ui_key_name_updated}" --data-urlencode "user_id=${ui_user_id}" \
-  --data-urlencode "allowed_models=${ui_qualified_model}" --data-urlencode 'status=disabled')
+  --data-urlencode "model_ids=${ui_model_id}" --data-urlencode 'status=disabled')
 [[ "$status" == 303 ]] || { echo "WebUI virtual-key update failed ($status)" >&2; exit 1; }
 curl -fsS "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys/${ui_key_id}" -H "Authorization: Bearer ${admin_token}" \
-  | jq -e --arg name "$ui_key_name_updated" '.name == $name and .status == "disabled"' >/dev/null
+  | jq -e --arg name "$ui_key_name_updated" --arg model "$ui_model_id" \
+    '.name == $name and .status == "disabled" and .model_ids == [$model]' >/dev/null
+
+status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/models/${ui_model_id}" -H "Authorization: Bearer ${admin_token}")
+[[ "$status" == 409 ]] || { echo "model deletion with a live virtual-key reference did not conflict ($status)" >&2; exit 1; }
+status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/providers/${ui_provider_id}" -H "Authorization: Bearer ${admin_token}")
+[[ "$status" == 409 ]] || { echo "provider deletion with a live model did not conflict ($status)" >&2; exit 1; }
 
 curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-delete-key-confirm.html" "$ui_base/virtual-keys/${ui_key_id}/delete"
 grep -Fq 'Delete virtual key' "$TMP_DIR/ui-delete-key-confirm.html"
@@ -537,6 +608,18 @@ status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-delete-key.body" -w '%{htt
 status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys/${ui_key_id}" -H "Authorization: Bearer ${admin_token}")
 [[ "$status" == 404 ]] || { echo "WebUI-deleted virtual key remains available ($status)" >&2; exit 1; }
 ui_key_id=""
+
+curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-delete-model-confirm.html" "$ui_base/models/${ui_model_id}/delete"
+grep -Fq 'Delete model' "$TMP_DIR/ui-delete-model-confirm.html"
+delete_csrf=$(hidden_input_value "$TMP_DIR/ui-delete-model-confirm.html" _csrf)
+delete_etag=$(hidden_input_value "$TMP_DIR/ui-delete-model-confirm.html" _etag)
+[[ -n "$delete_csrf" && -n "$delete_etag" ]] || { echo "WebUI model deletion confirmation lacks CSRF or ETag" >&2; exit 1; }
+status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-delete-model.body" -w '%{http_code}' \
+	-X POST "$ui_base/models/${ui_model_id}/delete" --data-urlencode "_csrf=${delete_csrf}" --data-urlencode "_etag=${delete_etag}")
+[[ "$status" == 303 ]] || { echo "WebUI model deletion failed ($status)" >&2; exit 1; }
+status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CONTROL_PORT}/v1/models/${ui_model_id}" -H "Authorization: Bearer ${admin_token}")
+[[ "$status" == 404 ]] || { echo "WebUI-deleted model remains available ($status)" >&2; exit 1; }
+ui_model_id=""
 
 curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-delete-provider-confirm.html" "$ui_base/providers/${ui_provider_id}/delete"
 grep -Fq 'Delete provider' "$TMP_DIR/ui-delete-provider-confirm.html"
@@ -567,8 +650,12 @@ status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CONTROL_POR
 [[ "$status" == 404 ]] || { echo "resource control plane unexpectedly exposes virtual keys ($status)" >&2; exit 1; }
 status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/users" -H "Authorization: Bearer ${admin_token}")
 [[ "$status" == 404 ]] || { echo "virtual-key control plane unexpectedly exposes users ($status)" >&2; exit 1; }
+status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/models" -H "Authorization: Bearer ${admin_token}")
+[[ "$status" == 404 ]] || { echo "virtual-key control plane unexpectedly exposes models ($status)" >&2; exit 1; }
 status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/internal/v1/subjects/sync" -H 'Content-Type: application/json' -d '{}')
 [[ "$status" == 401 ]] || { echo "subject sync is reachable without the Dapr app token ($status)" >&2; exit 1; }
+status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/internal/v1/model-subjects/sync" -H 'Content-Type: application/json' -d '{}')
+[[ "$status" == 401 ]] || { echo "model-subject sync is reachable without the Dapr app token ($status)" >&2; exit 1; }
 
 user_name="E2E ${RUN_ID}"
 user_email="${RUN_ID}@example.com"
@@ -582,39 +669,58 @@ provider=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/providers" \
   -d "$(jq -nc --arg name "E2E ${RUN_ID}" --arg slug "$PROVIDER_SLUG" --arg app "$ADAPTER_APP_ID" --arg base "http://${node_ip}:${PROVIDER_PORT}" --arg secret "$PROVIDER_SECRET" '{slug:$slug,name:$name,kind:"anthropic",adapter_app_id:$app,base_url:$base,secret_ref:{store:"kubernetes",name:$secret,key:"api-key"}}')")
 provider_id=$(jq -er .id <<<"$provider")
 
-qualified_model="${PROVIDER_SLUG}/claude-e2e"
+model_alias="model-${RUN_ID}"
+upstream_model="claude-e2e"
+model=$(curl -fsS -D "$TMP_DIR/model-create.headers" "http://127.0.0.1:${CONTROL_PORT}/v1/models" \
+  -H "Authorization: Bearer ${admin_token}" -H 'Content-Type: application/json' \
+  -d "$(jq -nc --arg alias "$model_alias" --arg provider "$provider_id" --arg upstream "$upstream_model" \
+    '{alias:$alias,provider_id:$provider,upstream_model:$upstream}')")
+model_id=$(jq -er .id <<<"$model")
+jq -e --arg alias "$model_alias" --arg provider "$provider_id" --arg upstream "$upstream_model" \
+  '.alias == $alias and .provider_id == $provider and .upstream_model == $upstream and .status == "active" and .revision == 1' <<<"$model" >/dev/null
+grep -Eiq '^etag: "[a-f0-9]+"' "$TMP_DIR/model-create.headers"
+
+status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys" \
+  -H "Authorization: Bearer ${admin_token}" -H 'Content-Type: application/json' \
+  -d "$(jq -nc --arg user "$user_id" '{name:"invalid empty models",user_id:$user,model_ids:[]}')")
+[[ "$status" == 400 ]] || { echo "virtual key accepted an empty model_ids array ($status)" >&2; exit 1; }
 
 created_key=$(curl -fsS "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys" \
   -H "Authorization: Bearer ${admin_token}" -H 'Content-Type: application/json' \
-  -d "$(jq -nc --arg user "$user_id" --arg model "$qualified_model" '{name:"E2E key",user_id:$user,allowed_models:[$model]}')")
+  -d "$(jq -nc --arg user "$user_id" --arg model "$model_id" '{name:"E2E key",user_id:$user,model_ids:[$model]}')")
 key_id=$(jq -er .virtual_key.id <<<"$created_key")
 virtual_key=$(jq -er .key <<<"$created_key")
+jq -e --arg model "$model_id" '.virtual_key.model_ids == [$model]' <<<"$created_key" >/dev/null
 
 # Deletion crosses the service boundary: the remote fence must map its nonempty
 # per-user key index to the public conflict contract.
 status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/users/${user_id}" -H "Authorization: Bearer ${admin_token}")
 [[ "$status" == 409 ]] || { echo "user deletion with a live virtual key did not conflict ($status)" >&2; exit 1; }
+status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/models/${model_id}" -H "Authorization: Bearer ${admin_token}")
+[[ "$status" == 409 ]] || { echo "model deletion with a live virtual key did not conflict ($status)" >&2; exit 1; }
+status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/providers/${provider_id}" -H "Authorization: Bearer ${admin_token}")
+[[ "$status" == 409 ]] || { echo "provider deletion with a live model did not conflict ($status)" >&2; exit 1; }
 
 call_openai_chat() {
   curl -fsS "http://127.0.0.1:${OPENAI_CHAT_PORT}/v1/chat/completions" \
     -H "Authorization: Bearer ${virtual_key}" -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg model "$qualified_model" '{model:$model,messages:[{role:"system",content:"Be concise"},{role:"user",content:"Say ok"}],max_completion_tokens:32}')"
+    -d "$(jq -nc --arg model "$model_alias" '{model:$model,messages:[{role:"system",content:"Be concise"},{role:"user",content:"Say ok"}],max_completion_tokens:32}')"
 }
 
 call_openai_responses() {
   curl -fsS "http://127.0.0.1:${OPENAI_RESPONSES_PORT}/v1/responses" \
     -H "Authorization: Bearer ${virtual_key}" -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg model "$qualified_model" '{model:$model,input:"Say ok",max_output_tokens:32,store:false}')"
+    -d "$(jq -nc --arg model "$model_alias" '{model:$model,input:"Say ok",max_output_tokens:32,store:false}')"
 }
 
 call_anthropic() {
   curl -fsS "http://127.0.0.1:${ANTHROPIC_GATEWAY_PORT}/v1/messages" \
     -H "x-api-key: ${virtual_key}" -H 'anthropic-version: 2023-06-01' -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg model "$qualified_model" '{model:$model,max_tokens:32,system:"Be concise",messages:[{role:"user",content:"Say ok"}]}')"
+    -d "$(jq -nc --arg model "$model_alias" '{model:$model,max_tokens:32,system:"Be concise",messages:[{role:"user",content:"Say ok"}]}')"
 }
 
 call_gemini() {
-  curl -fsS "http://127.0.0.1:${GEMINI_GATEWAY_PORT}/v1beta/models/${qualified_model}:generateContent" \
+  curl -fsS "http://127.0.0.1:${GEMINI_GATEWAY_PORT}/v1beta/models/${model_alias}:generateContent" \
     -H "x-goog-api-key: ${virtual_key}" -H 'Content-Type: application/json' \
     -d '{"contents":[{"role":"user","parts":[{"text":"Say ok"}]}],"generationConfig":{"maxOutputTokens":32}}'
 }
@@ -635,20 +741,40 @@ assert_all_gateways_unauthorized() {
   local status
   status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${OPENAI_CHAT_PORT}/v1/chat/completions" \
     -H "Authorization: Bearer ${virtual_key}" -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg model "$qualified_model" '{model:$model,messages:[{role:"user",content:"Say ok"}]}')")
+    -d "$(jq -nc --arg model "$model_alias" '{model:$model,messages:[{role:"user",content:"Say ok"}]}')")
   [[ "$status" == 401 ]] || { echo "OpenAI Chat accepted a revoked user ($status)" >&2; return 1; }
   status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${OPENAI_RESPONSES_PORT}/v1/responses" \
     -H "Authorization: Bearer ${virtual_key}" -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg model "$qualified_model" '{model:$model,input:"Say ok",store:false}')")
+    -d "$(jq -nc --arg model "$model_alias" '{model:$model,input:"Say ok",store:false}')")
   [[ "$status" == 401 ]] || { echo "OpenAI Responses accepted a revoked user ($status)" >&2; return 1; }
   status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${ANTHROPIC_GATEWAY_PORT}/v1/messages" \
     -H "x-api-key: ${virtual_key}" -H 'anthropic-version: 2023-06-01' -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg model "$qualified_model" '{model:$model,max_tokens:32,messages:[{role:"user",content:"Say ok"}]}')")
+    -d "$(jq -nc --arg model "$model_alias" '{model:$model,max_tokens:32,messages:[{role:"user",content:"Say ok"}]}')")
   [[ "$status" == 401 ]] || { echo "Anthropic gateway accepted a revoked user ($status)" >&2; return 1; }
-  status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${GEMINI_GATEWAY_PORT}/v1beta/models/${qualified_model}:generateContent" \
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${GEMINI_GATEWAY_PORT}/v1beta/models/${model_alias}:generateContent" \
     -H "x-goog-api-key: ${virtual_key}" -H 'Content-Type: application/json' \
     -d '{"contents":[{"role":"user","parts":[{"text":"Say ok"}]}]}' )
   [[ "$status" == 401 ]] || { echo "Gemini gateway accepted a revoked user ($status)" >&2; return 1; }
+}
+
+assert_all_gateways_model_forbidden() {
+  local status
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${OPENAI_CHAT_PORT}/v1/chat/completions" \
+    -H "Authorization: Bearer ${virtual_key}" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg model "$model_alias" '{model:$model,messages:[{role:"user",content:"Say ok"}]}')")
+  [[ "$status" == 403 ]] || { echo "OpenAI Chat routed a disabled model ($status)" >&2; return 1; }
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${OPENAI_RESPONSES_PORT}/v1/responses" \
+    -H "Authorization: Bearer ${virtual_key}" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg model "$model_alias" '{model:$model,input:"Say ok",store:false}')")
+  [[ "$status" == 403 ]] || { echo "OpenAI Responses routed a disabled model ($status)" >&2; return 1; }
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${ANTHROPIC_GATEWAY_PORT}/v1/messages" \
+    -H "x-api-key: ${virtual_key}" -H 'anthropic-version: 2023-06-01' -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg model "$model_alias" '{model:$model,max_tokens:32,messages:[{role:"user",content:"Say ok"}]}')")
+  [[ "$status" == 403 ]] || { echo "Anthropic gateway routed a disabled model ($status)" >&2; return 1; }
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${GEMINI_GATEWAY_PORT}/v1beta/models/${model_alias}:generateContent" \
+    -H "x-goog-api-key: ${virtual_key}" -H 'Content-Type: application/json' \
+    -d '{"contents":[{"role":"user","parts":[{"text":"Say ok"}]}]}' )
+  [[ "$status" == 403 ]] || { echo "Gemini gateway routed a disabled model ($status)" >&2; return 1; }
 }
 
 set_user_status() {
@@ -656,6 +782,14 @@ set_user_status() {
   curl -fsS -X PUT "http://127.0.0.1:${CONTROL_PORT}/v1/users/${user_id}" \
     -H "Authorization: Bearer ${admin_token}" -H 'Content-Type: application/json' \
     -d "$(jq -nc --arg name "$user_name" --arg email "$user_email" --arg status "$new_status" '{name:$name,email:$email,status:$status}')"
+}
+
+set_model_status() {
+  local new_status=$1
+  curl -fsS -X PUT "http://127.0.0.1:${CONTROL_PORT}/v1/models/${model_id}" \
+    -H "Authorization: Bearer ${admin_token}" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg alias "$model_alias" --arg provider "$provider_id" --arg upstream "$upstream_model" --arg status "$new_status" \
+      '{alias:$alias,provider_id:$provider,upstream_model:$upstream,status:$status}')"
 }
 
 assert_all_gateways
@@ -669,15 +803,25 @@ enabled_user=$(set_user_status active)
 jq -e '.status == "active" and .revision >= 3' <<<"$enabled_user" >/dev/null
 assert_all_gateways
 
+# Model status is projected into the key domain. Every gateway uses the alias
+# but authorizes the stable Model ID before resolving its Provider route.
+disabled_model=$(set_model_status disabled)
+jq -e '.status == "disabled" and .revision >= 2' <<<"$disabled_model" >/dev/null
+assert_all_gateways_model_forbidden
+enabled_model=$(set_model_status active)
+jq -e '.status == "active" and .revision >= 3' <<<"$enabled_model" >/dev/null
+assert_all_gateways
+
 # The virtual-key service remains independently useful while the resource
-# control plane is down. The WebUI keeps the key form usable with a manually
-# supplied, already-synchronized owner ID and reports the partial outage.
+# control plane is down. The BFF accepts already-synchronized user and Model IDs
+# while its rendered form reports that both choice catalogs are unavailable.
 scale_down_control_plane
 status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-resource-outage-dashboard.html" -w '%{http_code}' "$ui_base/")
 [[ "$status" == 200 ]] || { echo "WebUI dashboard failed during resource outage ($status)" >&2; exit 1; }
 grep -Fq 'Degraded' "$TMP_DIR/ui-resource-outage-dashboard.html"
 curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-resource-outage-key-form.html" "$ui_base/virtual-keys/new"
 grep -Fq 'User choices are unavailable' "$TMP_DIR/ui-resource-outage-key-form.html"
+grep -Fq 'Model choices are unavailable' "$TMP_DIR/ui-resource-outage-key-form.html"
 grep -Fq 'A known ID remains usable' "$TMP_DIR/ui-resource-outage-key-form.html"
 outage_csrf=$(hidden_input_value "$TMP_DIR/ui-resource-outage-key-form.html" _csrf)
 outage_operation=$(hidden_input_value "$TMP_DIR/ui-resource-outage-key-form.html" _operation)
@@ -685,7 +829,7 @@ independent_key_name="independence ${RUN_ID}"
 status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-resource-outage-key.html" -w '%{http_code}' \
   -X POST "$ui_base/virtual-keys" --data-urlencode "_csrf=${outage_csrf}" --data-urlencode "_operation=${outage_operation}" \
   --data-urlencode "name=${independent_key_name}" --data-urlencode "user_id=${user_id}" \
-  --data-urlencode "allowed_models=${qualified_model}" --data-urlencode 'status=active')
+  --data-urlencode "model_ids=${model_id}" --data-urlencode 'status=active')
 [[ "$status" == 201 ]] || { echo "WebUI key creation failed during resource outage ($status)" >&2; exit 1; }
 independent_key_id=$(curl -fsS "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys" -H "Authorization: Bearer ${admin_token}" \
   | jq -er --arg name "$independent_key_name" '.data | map(select(.name == $name)) | first | .id')
@@ -759,4 +903,4 @@ grep -Eiq '^set-cookie: gwai_admin_session=; .*Max-Age=0; .*HttpOnly; SameSite=S
 status=$(curl -sS -b "$ui_cookie_jar" -o /dev/null -w '%{http_code}' "$ui_base/")
 [[ "$status" == 303 ]] || { echo "WebUI session remained authenticated after logout ($status)" >&2; exit 1; }
 
-echo "k3s e2e passed: administrative WebUI session, CSRF and lifecycle flows; split control planes; fail-closed revocation; three state domains; four gateway protocols; control-plane outage; provider invocation; secrets; and IR translation"
+echo "k3s e2e passed: WebUI user/model/provider/key lifecycle; Model-ID references and deletion fences; split control planes; fail-closed user/model revocation; three state domains; four gateway protocols; control-plane outage; provider invocation; secrets; and IR translation"
