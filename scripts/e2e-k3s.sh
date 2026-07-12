@@ -512,6 +512,8 @@ for lifecycle_status in disabled active; do
 done
 
 ui_key_name="WebUI key ${RUN_ID}"
+ui_key_expiry="2099-12-31T23:59"
+ui_key_expiry_rfc3339="${ui_key_expiry}:00Z"
 curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-new-key.html" "$ui_base/virtual-keys/new"
 ui_key_csrf=$(hidden_input_value "$TMP_DIR/ui-new-key.html" _csrf)
 ui_operation=$(hidden_input_value "$TMP_DIR/ui-new-key.html" _operation)
@@ -519,10 +521,13 @@ ui_operation=$(hidden_input_value "$TMP_DIR/ui-new-key.html" _operation)
 status=$(curl -sS -b "$ui_cookie_jar" -D "$TMP_DIR/ui-create-key.headers" -o "$TMP_DIR/ui-create-key.body" -w '%{http_code}' \
 	-X POST "$ui_base/virtual-keys" --data-urlencode "_csrf=${ui_key_csrf}" --data-urlencode "_operation=${ui_operation}" \
   --data-urlencode "name=${ui_key_name}" --data-urlencode "user_id=${ui_user_id}" \
-  --data-urlencode "model_ids=${ui_model_id}" --data-urlencode 'status=active')
+  --data-urlencode "model_ids=${ui_model_id}" --data-urlencode 'status=active' \
+  --data-urlencode "expires_at=${ui_key_expiry}")
 [[ "$status" == 201 ]] || { echo "WebUI virtual-key creation failed ($status)" >&2; exit 1; }
 ui_key_id=$(curl -fsS "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys" -H "Authorization: Bearer ${admin_token}" \
   | jq -er --arg name "$ui_key_name" '.data | map(select(.name == $name)) | first | .id')
+curl -fsS "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys/${ui_key_id}" -H "Authorization: Bearer ${admin_token}" \
+  | jq -e --arg expiry "$ui_key_expiry_rfc3339" '.expires_at == $expiry' >/dev/null
 grep -Eiq '^cache-control: no-store, max-age=0' "$TMP_DIR/ui-create-key.headers"
 grep -Eiq '^pragma: no-cache' "$TMP_DIR/ui-create-key.headers"
 grep -Eq 'gwai_[A-Za-z0-9_-]{40,}' "$TMP_DIR/ui-create-key.body"
@@ -579,18 +584,22 @@ for lifecycle_status in disabled active; do
     | jq -e --arg status "$lifecycle_status" '.status == $status' >/dev/null
 done
 curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-edit-key.html" "$ui_base/virtual-keys/${ui_key_id}/edit"
+grep -Fq "name=\"expires_at\" type=\"datetime-local\" step=\"any\" value=\"${ui_key_expiry}:00\"" "$TMP_DIR/ui-edit-key.html"
 ui_key_edit_csrf=$(hidden_input_value "$TMP_DIR/ui-edit-key.html" _csrf)
 ui_key_etag=$(hidden_input_value "$TMP_DIR/ui-edit-key.html" _etag)
-[[ -n "$ui_key_edit_csrf" && -n "$ui_key_etag" ]] || { echo "WebUI key edit form lacks CSRF or ETag" >&2; exit 1; }
+ui_key_expiry_original=$(hidden_input_value "$TMP_DIR/ui-edit-key.html" expires_at_original)
+[[ -n "$ui_key_edit_csrf" && -n "$ui_key_etag" && "$ui_key_expiry_original" == "$ui_key_expiry_rfc3339" ]] \
+  || { echo "WebUI key edit form lacks CSRF, ETag or precise expiry metadata" >&2; exit 1; }
 ui_key_name_updated="WebUI key updated ${RUN_ID}"
 status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-update-key.body" -w '%{http_code}' \
 	-X POST "$ui_base/virtual-keys/${ui_key_id}" --data-urlencode "_csrf=${ui_key_edit_csrf}" --data-urlencode "_etag=${ui_key_etag}" \
   --data-urlencode "name=${ui_key_name_updated}" --data-urlencode "user_id=${ui_user_id}" \
-  --data-urlencode "model_ids=${ui_model_id}" --data-urlencode 'status=disabled')
+  --data-urlencode "model_ids=${ui_model_id}" --data-urlencode 'status=disabled' \
+  --data-urlencode "expires_at=${ui_key_expiry}:00" --data-urlencode "expires_at_original=${ui_key_expiry_original}")
 [[ "$status" == 303 ]] || { echo "WebUI virtual-key update failed ($status)" >&2; exit 1; }
 curl -fsS "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/v1/virtual-keys/${ui_key_id}" -H "Authorization: Bearer ${admin_token}" \
-  | jq -e --arg name "$ui_key_name_updated" --arg model "$ui_model_id" \
-    '.name == $name and .status == "disabled" and .model_ids == [$model]' >/dev/null
+  | jq -e --arg name "$ui_key_name_updated" --arg model "$ui_model_id" --arg expiry "$ui_key_expiry_rfc3339" \
+    '.name == $name and .status == "disabled" and .model_ids == [$model] and .expires_at == $expiry' >/dev/null
 
 status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/models/${ui_model_id}" -H "Authorization: Bearer ${admin_token}")
 [[ "$status" == 409 ]] || { echo "model deletion with a live virtual-key reference did not conflict ($status)" >&2; exit 1; }

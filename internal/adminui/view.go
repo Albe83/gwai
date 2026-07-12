@@ -237,22 +237,55 @@ func (f modelForm) input() controlplane.ModelInput {
 }
 
 type virtualKeyForm struct {
-	Name      string
-	UserID    string
-	ModelIDs  []string
-	Status    string
-	ExpiresAt string
+	Name              string
+	UserID            string
+	ModelIDs          []string
+	Status            string
+	ExpiresAt         string
+	OriginalExpiresAt string
 }
 
+const (
+	virtualKeyExpiryMinutesLayout = "2006-01-02T15:04"
+	virtualKeyExpirySecondsLayout = "2006-01-02T15:04:05"
+	virtualKeyExpiryDisplayLayout = "2006-01-02T15:04:05.999"
+)
+
 func virtualKeyFormFromModel(key controlplane.PublicVirtualKey) virtualKeyForm {
-	expires := ""
+	expires, originalExpires := "", ""
 	if key.ExpiresAt != nil {
-		expires = key.ExpiresAt.UTC().Format("2006-01-02T15:04:05.999999999")
+		timestamp := key.ExpiresAt.UTC()
+		expires = timestamp.Format(virtualKeyExpiryDisplayLayout)
+		originalExpires = timestamp.Format(time.RFC3339Nano)
 	}
 	return virtualKeyForm{
 		Name: key.Name, UserID: key.UserID,
-		ModelIDs: slices.Clone(key.ModelIDs), Status: string(key.Status), ExpiresAt: expires,
+		ModelIDs: slices.Clone(key.ModelIDs), Status: string(key.Status),
+		ExpiresAt: expires, OriginalExpiresAt: originalExpires,
 	}
+}
+
+func parseVirtualKeyExpiry(value string) (time.Time, error) {
+	layout := ""
+	switch {
+	case len(value) == len("2006-01-02T15:04"):
+		layout = virtualKeyExpiryMinutesLayout
+	case len(value) == len("2006-01-02T15:04:05"):
+		layout = virtualKeyExpirySecondsLayout
+	case len(value) >= len("2006-01-02T15:04:05.0") && len(value) <= len("2006-01-02T15:04:05.000"):
+		if value[19] != '.' {
+			return time.Time{}, errors.New("invalid datetime-local fraction separator")
+		}
+		for _, digit := range value[20:] {
+			if digit < '0' || digit > '9' {
+				return time.Time{}, errors.New("invalid datetime-local fraction")
+			}
+		}
+		layout = virtualKeyExpirySecondsLayout
+	default:
+		return time.Time{}, errors.New("invalid datetime-local precision")
+	}
+	return time.ParseInLocation(layout, value, time.UTC)
 }
 
 func (f virtualKeyForm) input() (controlplane.VirtualKeyInput, error) {
@@ -268,10 +301,15 @@ func (f virtualKeyForm) input() (controlplane.VirtualKeyInput, error) {
 	}
 	slices.Sort(modelIDs)
 	var expires *time.Time
-	if strings.TrimSpace(f.ExpiresAt) != "" {
-		parsed, err := time.ParseInLocation("2006-01-02T15:04:05", strings.TrimSpace(f.ExpiresAt), time.UTC)
+	expiresValue := strings.TrimSpace(f.ExpiresAt)
+	if expiresValue != "" {
+		parsed, err := parseVirtualKeyExpiry(expiresValue)
 		if err != nil {
 			return controlplane.VirtualKeyInput{}, fmt.Errorf("expiration must be a valid UTC date and time")
+		}
+		original, originalErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(f.OriginalExpiresAt))
+		if originalErr == nil && expiresValue == original.UTC().Format(virtualKeyExpiryDisplayLayout) {
+			parsed = original.UTC()
 		}
 		expires = &parsed
 	}
