@@ -24,6 +24,7 @@ type User struct {
 
 type Provider struct {
 	ID           string             `json:"id"`
+	Slug         string             `json:"slug"`
 	Name         string             `json:"name"`
 	Kind         string             `json:"kind"`
 	BaseURL      string             `json:"base_url"`
@@ -33,17 +34,6 @@ type Provider struct {
 	Status       Status             `json:"status"`
 	CreatedAt    time.Time          `json:"created_at"`
 	UpdatedAt    time.Time          `json:"updated_at"`
-}
-
-type Model struct {
-	ID              string    `json:"id"`
-	Alias           string    `json:"alias"`
-	ProviderID      string    `json:"provider_id"`
-	UpstreamModel   string    `json:"upstream_model"`
-	MaxOutputTokens int       `json:"max_output_tokens"`
-	Status          Status    `json:"status"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type VirtualKey struct {
@@ -96,9 +86,8 @@ type Authorization struct {
 }
 
 type Route struct {
-	Alias           string `json:"alias"`
-	ProviderID      string `json:"provider_id"`
-	UpstreamModel   string `json:"upstream_model"`
-	MaxOutputTokens int    `json:"max_output_tokens"`
-	AdapterAppID    string `json:"adapter_app_id"`
+	QualifiedModel string `json:"qualified_model"`
+	ProviderID     string `json:"provider_id"`
+	UpstreamModel  string `json:"upstream_model"`
+	AdapterAppID   string `json:"adapter_app_id"`
 }

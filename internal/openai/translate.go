@@ -204,18 +204,20 @@ func ToIR(request ChatCompletionRequest, route controlplane.Route, requestID str
 		return ir.Request{}, invalid("response_format", "unsupported_parameter", "response_format is not supported by the selected provider")
 	}
 
-	maxTokens := route.MaxOutputTokens
+	var maxTokens *int
 	if request.MaxTokens != nil && request.MaxCompletionTokens != nil {
 		return ir.Request{}, invalid("max_tokens", "invalid_request", "max_tokens and max_completion_tokens cannot both be set")
 	}
 	if request.MaxTokens != nil {
-		maxTokens = *request.MaxTokens
+		value := *request.MaxTokens
+		maxTokens = &value
 	}
 	if request.MaxCompletionTokens != nil {
-		maxTokens = *request.MaxCompletionTokens
+		value := *request.MaxCompletionTokens
+		maxTokens = &value
 	}
-	if maxTokens <= 0 || maxTokens > route.MaxOutputTokens {
-		return ir.Request{}, invalid("max_completion_tokens", "invalid_value", "max completion tokens must be between 1 and %d", route.MaxOutputTokens)
+	if maxTokens != nil && *maxTokens <= 0 {
+		return ir.Request{}, invalid("max_completion_tokens", "invalid_value", "max completion tokens must be positive")
 	}
 	if request.Temperature != nil && (*request.Temperature < 0 || *request.Temperature > 1) {
 		return ir.Request{}, invalid("temperature", "invalid_value", "temperature must be between 0 and 1 for the selected provider")

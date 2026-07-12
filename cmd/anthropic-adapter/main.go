@@ -23,12 +23,38 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	providerSlug, err := platform.RequiredEnv("GWAI_PROVIDER_SLUG")
+	if err != nil {
+		return err
+	}
+	appID, err := platform.RequiredEnv("GWAI_ADAPTER_APP_ID")
+	if err != nil {
+		return err
+	}
+	defaultMaxOutputTokens, err := platform.EnvInt64("GWAI_DEFAULT_MAX_OUTPUT_TOKENS", 4096)
+	if err != nil {
+		return err
+	}
+	if defaultMaxOutputTokens <= 0 {
+		return fmt.Errorf("GWAI_DEFAULT_MAX_OUTPUT_TOKENS must be positive")
+	}
+	maxOutputTokens, err := platform.EnvInt64("GWAI_MAX_OUTPUT_TOKENS", 0)
+	if err != nil {
+		return err
+	}
+	if maxOutputTokens < 0 || (maxOutputTokens > 0 && maxOutputTokens < defaultMaxOutputTokens) {
+		return fmt.Errorf("GWAI_MAX_OUTPUT_TOKENS must be zero or at least GWAI_DEFAULT_MAX_OUTPUT_TOKENS")
+	}
 	port := platform.Env("PORT", "8080")
 	daprPort := platform.Env("DAPR_HTTP_PORT", "3500")
 	daprClient := daprhttp.New("http://127.0.0.1:"+daprPort, os.Getenv("DAPR_API_TOKEN"), &http.Client{})
-	controlPlane := controlplane.NewClient(daprClient, platform.Env("GWAI_CONTROL_PLANE_APP_ID", "gwai-control-plane"))
+	store := daprhttp.NewStateStore(daprClient, platform.Env("GWAI_STATE_STORE", "gwai-state"))
+	runtime := controlplane.NewRuntime(controlplane.NewRepository(store))
 	secretStore := daprhttp.NewSecretStore(daprClient)
-	handler := anthropic.NewHTTPHandler(controlPlane, secretStore, anthropic.NewUpstreamClient(requestTimeout), maxBody, os.Getenv("APP_API_TOKEN"), logger)
+	handler := anthropic.NewHTTPHandler(runtime, secretStore, anthropic.NewUpstreamClient(requestTimeout), anthropic.Config{
+		ProviderSlug: providerSlug, AppID: appID, MaxBody: maxBody, AppToken: os.Getenv("APP_API_TOKEN"),
+		DefaultMaxOutputTokens: int(defaultMaxOutputTokens), MaxOutputTokens: int(maxOutputTokens),
+	}, logger)
 
 	server := &http.Server{
 		Addr:              ":" + port,

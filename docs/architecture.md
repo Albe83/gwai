@@ -1,110 +1,110 @@
 # Architecture
 
-## Goals
+## Boundaries
 
 gwai keeps client compatibility, provider compatibility, and lifecycle policy
 independent. If there are `C` client protocols and `P` provider protocols, the
-adapter count is `C + P`, rather than `C × P` direct converters.
+translator count is `C + P`, rather than `C × P` direct converters.
 
-The system has two subsystems:
+- The control plane owns administrative mutations for users, virtual keys, and
+  provider configurations.
+- Gateways own public client protocols and translate them to/from the canonical IR.
+- Provider adapters own one provider protocol and translate it to/from the IR.
+- A read-only runtime library lets data-plane processes read current entities
+  directly through Dapr State Store; they never invoke the control plane.
 
-- The control plane owns users, virtual keys, providers, logical model aliases,
-  authorization, and route resolution.
-- The data plane owns public protocol parsing, the canonical IR, provider
-  protocol generation, and response translation.
-
-## Services
-
-| Service | Public responsibility | Internal dependencies |
+| Service | Public responsibility | Runtime dependencies |
 | --- | --- | --- |
 | `gwai-control-plane` | Admin CRUD API | Dapr State Store |
-| `gwai-openai-gateway` | `POST /v1/chat/completions` | Control plane and selected adapter through Dapr invocation |
-| `gwai-anthropic-adapter` | None; accepts IR only | Control plane, Dapr Secret Store, Anthropic HTTP API |
+| `gwai-openai-gateway` | `POST /v1/chat/completions` | Dapr State Store and selected provider app ID |
+| Anthropic adapter instance | None; accepts IR only | Dapr State Store, Secret Store, Anthropic HTTP API |
 
-The provider record selects an adapter by Dapr app ID. A model maps a stable
-client alias to a provider and upstream model ID. Neither the ingress adapter
-nor the IR contains an Anthropic API key.
+## Routing and request sequence
 
-## Request sequence
+Each provider has an immutable DNS-label `slug` and explicit
+`adapter_app_id`. A client model is `provider-slug/upstream-model`; only the
+first `/` separates routing metadata. Helm creates one adapter workload and
+Dapr identity per configured provider account. The persisted app ID and Helm
+app ID must match.
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant O as OpenAI ingress
-    participant CP as Control plane
-    participant A as Anthropic adapter
+    participant G as OpenAI gateway
+    participant S as Dapr State Store
+    participant A as Provider adapter
     participant D as Dapr Secret Store
     participant P as Anthropic
 
-    C->>O: Bearer virtual key + Chat Completions request
-    O->>CP: authorize(key, model alias)
-    CP-->>O: user/key identity
-    O->>CP: resolveRoute(alias)
-    CP-->>O: adapter app ID + provider/model IDs
-    O->>A: versioned IR request (Dapr invocation)
-    A->>CP: resolveProvider(provider ID)
-    CP-->>A: endpoint, API version, secret reference
-    A->>D: read provider secret
+    C->>G: Bearer virtual key + qualified model
+    G->>S: read key, user, provider by slug
+    S-->>G: authorization state + provider ID/app ID
+    G->>A: versioned IR (Dapr invocation by app ID)
+    A->>S: read configured provider by its own slug
+    S-->>A: endpoint, API version, secret reference
+    A->>A: verify provider ID and own app ID match the IR
+    A->>D: read scoped provider secret
     D-->>A: API key
     A->>P: Anthropic Messages request
     P-->>A: Anthropic response
-    A-->>O: IR response
-    O-->>C: OpenAI Chat Completion response
+    A-->>G: IR response
+    G-->>C: OpenAI Chat Completion response
 ```
+
+The gateway does not know provider-specific HTTP formats, endpoints, or
+credentials. An adapter does not know which public client protocol originated
+the IR. Dapr provides discovery, mTLS, invocation, and load balancing among
+replicas sharing the provider-specific app ID.
 
 ## Intermediate representation
 
 The IR is a versioned wire protocol, not a lowest-common-denominator SDK type.
-Version `2026-07-01` represents:
+Version `2026-07-11` represents multimodal messages, tools, common generation
+controls, usage, finish reasons, and a resolved route containing identifiers
+but never credentials. `max_output_tokens` is optional; when absent, the
+selected adapter owns the default and optional upper bound.
 
-- system, user, assistant, and tool messages;
-- text and image content;
-- tool definitions, calls, results, and tool selection;
-- common generation controls and token usage;
-- a resolved provider route that contains identifiers, never credentials.
+Adapters reject semantics they cannot preserve. The published contract is
+[`2026-07-11.schema.json`](../api/ir/2026-07-11.schema.json); Go types and
+validation live in `internal/ir`.
 
-Adapters must reject semantics they cannot preserve. Silently dropping an
-unsupported parameter is treated as a compatibility bug. The JSON Schema in
-[`api/ir`](../api/ir/2026-07-01.schema.json) is the external contract; Go types
-and validation live in `internal/ir`.
-
-## Control-plane persistence
+## Persistence
 
 Each resource is stored under a separate key. Transactional secondary indexes
-map model aliases and virtual-key digests to resource IDs; collection indexes
-support listing. Mutations use a Dapr state transaction and ETags. Valkey is the
-local state-store implementation, but domain code only knows the small
-`state.Store` interface.
+map provider slugs, adapter app IDs, user emails, and virtual-key digests to resource IDs;
+collection indexes support administration. Mutations use a Dapr state
+transaction and ETags. Valkey is the local backend, while domain code depends
+only on the narrow `state.Store` interface.
 
-The chart currently holds the control plane at one replica. ETags prevent lost
-index updates, but create-only uniqueness across multiple replicas requires a
-distributed lock or a database-native unique constraint before horizontal
-control-plane scaling.
+The Dapr Redis component uses `keyPrefix: name`, so all scoped gwai app IDs see
+the same component-prefixed keys. Dapr's default app-id prefix cannot be used
+because it would create a different logical registry for every service.
 
-## Security boundaries
+The data plane constructs only the read-only runtime interface, but shares the
+same persisted entity schema. This is deliberate and removes control-plane
+availability from request processing. Schema changes therefore require an
+explicit data migration or, during pre-release development, a documented state
+reset.
+
+The chart holds the control plane at one replica. ETags prevent lost index
+updates, but create-only uniqueness across multiple replicas requires a
+distributed lock or database-native unique constraint before scaling writes.
+
+## Security and availability
 
 - Admin APIs require a distinct control-plane Bearer token.
-- Client virtual keys are disclosed once and stored as SHA-256 digests.
-- Provider records contain a Dapr secret reference, not credential material.
-- Dapr mTLS identifies callers; service-invocation ACLs restrict methods.
-- Random Dapr API and app tokens authenticate app-to-sidecar and
-  sidecar-to-app traffic.
-- The bundled Valkey endpoint uses a generated, upgrade-stable password.
-- Per-service Dapr API allowlists expose only `state`, `invoke`, or `secrets` as
-  required.
-- The Anthropic service account can read only the Kubernetes Secret names in
-  `anthropicAdapter.secretNames`; Dapr secret scopes repeat that restriction.
-- Application containers run as UID/GID 65532 with a read-only root filesystem
-  and no Linux capabilities.
+- Virtual keys are disclosed once and persisted as SHA-256 digests.
+- Provider records contain secret references, never credential material.
+- Dapr component scopes expose state only to the three service roles.
+- Dapr ACLs permit only the OpenAI gateway to invoke `/v1/generate` on each
+  provider-specific adapter identity.
+- Every adapter has a dedicated ServiceAccount, Kubernetes Role, Dapr secret
+  scope, and explicit Secret allowlist.
+- Random Dapr API/app tokens, mTLS, non-root containers, read-only filesystems,
+  and dropped Linux capabilities reduce the service attack surface.
 
-## Availability and failure behavior
-
-The gateway and adapters are stateless. The control-plane deployment uses a
-zero-unavailable rolling update. A Dapr resiliency policy covers Kubernetes
-endpoint rotation, and the read-only control-plane client retries one completed
-transient Dapr failure while honoring the request context.
-
-Provider failures are normalized: rate limits remain HTTP 429; provider
-authentication, malformed responses, and network failures are returned as a
-sanitized gateway error. Provider response bodies and credentials are not sent
-to clients or logged.
+Gateway and adapter replicas are stateless. The request path continues while
+the control-plane Deployment is unavailable, provided the State Store, Dapr,
+selected adapter, and upstream provider remain available. Provider rate limits
+remain HTTP 429; credentials and provider response bodies are never returned to
+clients or logged.

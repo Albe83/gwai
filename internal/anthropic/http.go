@@ -19,7 +19,7 @@ import (
 )
 
 type ProviderResolver interface {
-	ResolveProvider(context.Context, string) (controlplane.Provider, error)
+	ResolveProviderBySlug(context.Context, string) (controlplane.Provider, error)
 }
 
 type SecretResolver interface {
@@ -32,14 +32,27 @@ type HTTPHandler struct {
 	upstream  *http.Client
 	maxBody   int64
 	appToken  string
+	config    Config
 	logger    *slog.Logger
 }
 
-func NewHTTPHandler(providers ProviderResolver, secrets SecretResolver, upstream *http.Client, maxBody int64, appToken string, logger *slog.Logger) http.Handler {
+type Config struct {
+	ProviderSlug           string
+	AppID                  string
+	MaxBody                int64
+	AppToken               string
+	DefaultMaxOutputTokens int
+	MaxOutputTokens        int
+}
+
+func NewHTTPHandler(providers ProviderResolver, secrets SecretResolver, upstream *http.Client, config Config, logger *slog.Logger) http.Handler {
 	if upstream == nil {
 		upstream = http.DefaultClient
 	}
-	handler := &HTTPHandler{providers: providers, secrets: secrets, upstream: upstream, maxBody: maxBody, appToken: appToken, logger: logger}
+	handler := &HTTPHandler{
+		providers: providers, secrets: secrets, upstream: upstream,
+		maxBody: config.MaxBody, appToken: config.AppToken, config: config, logger: logger,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", handler.health)
 	mux.HandleFunc("GET /readyz", handler.health)
@@ -78,7 +91,7 @@ func (h *HTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusBadRequest, "Invalid IR request", err.Error(), nil)
 		return
 	}
-	provider, err := h.providers.ResolveProvider(r.Context(), internalRequest.Route.ProviderID)
+	provider, err := h.providers.ResolveProviderBySlug(r.Context(), h.config.ProviderSlug)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, controlplane.ErrNotFound) || errors.Is(err, controlplane.ErrForbidden) {
@@ -91,12 +104,16 @@ func (h *HTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid provider", "this adapter only accepts Anthropic providers", nil)
 		return
 	}
+	if provider.ID != internalRequest.Route.ProviderID || provider.AdapterAppID != h.config.AppID {
+		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid route", "the request is not addressed to this provider adapter", nil)
+		return
+	}
 	apiKey, err := h.secrets.Get(r.Context(), provider.SecretRef)
 	if err != nil {
 		h.fail(w, r, http.StatusBadGateway, "Provider credential unavailable", "the provider credential could not be loaded", err)
 		return
 	}
-	providerRequest, err := ToMessageRequest(internalRequest)
+	providerRequest, err := ToMessageRequest(internalRequest, h.config.DefaultMaxOutputTokens, h.config.MaxOutputTokens)
 	if err != nil {
 		h.fail(w, r, http.StatusBadRequest, "Unsupported IR request", err.Error(), nil)
 		return
@@ -115,7 +132,7 @@ func (h *HTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 	upstreamRequest.Header.Set("Accept", "application/json")
 	upstreamRequest.Header.Set("x-api-key", apiKey)
 	upstreamRequest.Header.Set("anthropic-version", provider.APIVersion)
-	upstreamRequest.Header.Set("User-Agent", "gwai-anthropic-adapter/0.1")
+	upstreamRequest.Header.Set("User-Agent", "gwai-anthropic-adapter/0.2")
 	if requestID := platform.RequestID(r.Context()); requestID != "" {
 		upstreamRequest.Header.Set("X-Request-ID", requestID)
 	}

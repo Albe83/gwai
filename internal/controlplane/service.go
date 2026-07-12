@@ -43,21 +43,14 @@ type UserInput struct {
 }
 
 type ProviderInput struct {
+	Slug         string             `json:"slug"`
 	Name         string             `json:"name"`
 	Kind         string             `json:"kind"`
 	BaseURL      string             `json:"base_url,omitempty"`
 	APIVersion   string             `json:"api_version,omitempty"`
-	AdapterAppID string             `json:"adapter_app_id,omitempty"`
+	AdapterAppID string             `json:"adapter_app_id"`
 	SecretRef    daprhttp.SecretRef `json:"secret_ref"`
 	Status       Status             `json:"status,omitempty"`
-}
-
-type ModelInput struct {
-	Alias           string `json:"alias"`
-	ProviderID      string `json:"provider_id"`
-	UpstreamModel   string `json:"upstream_model"`
-	MaxOutputTokens int    `json:"max_output_tokens"`
-	Status          Status `json:"status,omitempty"`
 }
 
 type VirtualKeyInput struct {
@@ -187,6 +180,7 @@ func (s *Service) DeleteUser(ctx context.Context, id string) error {
 var appIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?$`)
 
 func normalizeProviderInput(input ProviderInput) (ProviderInput, error) {
+	input.Slug = strings.TrimSpace(input.Slug)
 	input.Name = strings.TrimSpace(input.Name)
 	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
 	input.BaseURL = strings.TrimRight(strings.TrimSpace(input.BaseURL), "/")
@@ -194,6 +188,9 @@ func normalizeProviderInput(input ProviderInput) (ProviderInput, error) {
 	input.AdapterAppID = strings.TrimSpace(input.AdapterAppID)
 	input.Status = normalizeStatus(input.Status)
 	if err := validateName(input.Name); err != nil {
+		return input, err
+	}
+	if err := validateProviderSlug(input.Slug); err != nil {
 		return input, err
 	}
 	if input.Kind != "anthropic" {
@@ -212,10 +209,7 @@ func normalizeProviderInput(input ProviderInput) (ProviderInput, error) {
 	if input.APIVersion == "" {
 		input.APIVersion = "2023-06-01"
 	}
-	if input.AdapterAppID == "" {
-		input.AdapterAppID = "gwai-anthropic-adapter"
-	}
-	if !appIDPattern.MatchString(input.AdapterAppID) {
+	if input.AdapterAppID == "" || !appIDPattern.MatchString(input.AdapterAppID) {
 		return input, &ValidationError{Field: "adapter_app_id", Message: "must be a valid lowercase Dapr app ID"}
 	}
 	input.SecretRef.Store = strings.TrimSpace(input.SecretRef.Store)
@@ -242,7 +236,7 @@ func (s *Service) CreateProvider(ctx context.Context, input ProviderInput) (Prov
 	}
 	now := s.now()
 	provider := Provider{
-		ID: id, Name: input.Name, Kind: input.Kind, BaseURL: input.BaseURL,
+		ID: id, Slug: input.Slug, Name: input.Name, Kind: input.Kind, BaseURL: input.BaseURL,
 		APIVersion: input.APIVersion, AdapterAppID: input.AdapterAppID,
 		SecretRef: input.SecretRef, Status: input.Status, CreatedAt: now, UpdatedAt: now,
 	}
@@ -269,143 +263,32 @@ func (s *Service) UpdateProvider(ctx context.Context, id string, input ProviderI
 	if err != nil {
 		return Provider{}, err
 	}
+	if input.Slug != current.Slug {
+		return Provider{}, &ValidationError{Field: "slug", Message: "is immutable"}
+	}
+	if input.AdapterAppID != current.AdapterAppID {
+		return Provider{}, &ValidationError{Field: "adapter_app_id", Message: "is immutable"}
+	}
+	old := current
 	current.Name = input.Name
 	current.Kind = input.Kind
 	current.BaseURL = input.BaseURL
 	current.APIVersion = input.APIVersion
-	current.AdapterAppID = input.AdapterAppID
 	current.SecretRef = input.SecretRef
 	current.Status = input.Status
 	current.UpdatedAt = s.now()
-	if err := s.repository.ReplaceProvider(ctx, current); err != nil {
+	if err := s.repository.ReplaceProvider(ctx, old, current); err != nil {
 		return Provider{}, err
 	}
 	return current, nil
 }
 
 func (s *Service) DeleteProvider(ctx context.Context, id string) error {
-	if _, err := s.repository.GetProvider(ctx, id); err != nil {
-		return err
-	}
-	models, err := s.repository.ListModels(ctx)
+	provider, err := s.repository.GetProvider(ctx, id)
 	if err != nil {
 		return err
 	}
-	for _, model := range models {
-		if model.ProviderID == id {
-			return fmt.Errorf("%w: provider still has models", ErrConflict)
-		}
-	}
-	return s.repository.DeleteProvider(ctx, id)
-}
-
-var aliasPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$`)
-
-func (s *Service) normalizeModelInput(ctx context.Context, input ModelInput) (ModelInput, error) {
-	input.Alias = strings.TrimSpace(input.Alias)
-	input.ProviderID = strings.TrimSpace(input.ProviderID)
-	input.UpstreamModel = strings.TrimSpace(input.UpstreamModel)
-	input.Status = normalizeStatus(input.Status)
-	if !aliasPattern.MatchString(input.Alias) {
-		return input, &ValidationError{Field: "alias", Message: "contains unsupported characters or has an invalid length"}
-	}
-	if input.ProviderID == "" {
-		return input, &ValidationError{Field: "provider_id", Message: "must not be empty"}
-	}
-	if _, err := s.repository.GetProvider(ctx, input.ProviderID); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return input, &ValidationError{Field: "provider_id", Message: "does not reference an existing provider"}
-		}
-		return input, err
-	}
-	if input.UpstreamModel == "" || len(input.UpstreamModel) > 300 {
-		return input, &ValidationError{Field: "upstream_model", Message: "must contain between 1 and 300 bytes"}
-	}
-	if input.MaxOutputTokens <= 0 || input.MaxOutputTokens > 1_000_000 {
-		return input, &ValidationError{Field: "max_output_tokens", Message: "must be between 1 and 1000000"}
-	}
-	if err := validateStatus(input.Status); err != nil {
-		return input, err
-	}
-	return input, nil
-}
-
-func (s *Service) CreateModel(ctx context.Context, input ModelInput) (Model, error) {
-	input, err := s.normalizeModelInput(ctx, input)
-	if err != nil {
-		return Model{}, err
-	}
-	id, err := platform.NewID("mdl")
-	if err != nil {
-		return Model{}, err
-	}
-	now := s.now()
-	model := Model{
-		ID: id, Alias: input.Alias, ProviderID: input.ProviderID, UpstreamModel: input.UpstreamModel,
-		MaxOutputTokens: input.MaxOutputTokens, Status: input.Status, CreatedAt: now, UpdatedAt: now,
-	}
-	if err := s.repository.CreateModel(ctx, model); err != nil {
-		return Model{}, err
-	}
-	return model, nil
-}
-
-func (s *Service) GetModel(ctx context.Context, id string) (Model, error) {
-	return s.repository.GetModel(ctx, id)
-}
-
-func (s *Service) ListModels(ctx context.Context) ([]Model, error) {
-	return s.repository.ListModels(ctx)
-}
-
-func (s *Service) UpdateModel(ctx context.Context, id string, input ModelInput) (Model, error) {
-	current, err := s.repository.GetModel(ctx, id)
-	if err != nil {
-		return Model{}, err
-	}
-	input, err = s.normalizeModelInput(ctx, input)
-	if err != nil {
-		return Model{}, err
-	}
-	if current.Alias != input.Alias {
-		keys, err := s.repository.ListVirtualKeys(ctx)
-		if err != nil {
-			return Model{}, err
-		}
-		for _, key := range keys {
-			if slices.Contains(key.AllowedModels, current.Alias) {
-				return Model{}, fmt.Errorf("%w: model alias is referenced by a virtual key", ErrConflict)
-			}
-		}
-	}
-	old := current
-	current.Alias = input.Alias
-	current.ProviderID = input.ProviderID
-	current.UpstreamModel = input.UpstreamModel
-	current.MaxOutputTokens = input.MaxOutputTokens
-	current.Status = input.Status
-	current.UpdatedAt = s.now()
-	if err := s.repository.ReplaceModel(ctx, old, current); err != nil {
-		return Model{}, err
-	}
-	return current, nil
-}
-
-func (s *Service) DeleteModel(ctx context.Context, id string) error {
-	model, err := s.repository.GetModel(ctx, id)
-	if err != nil {
-		return err
-	}
-	keys, err := s.repository.ListVirtualKeys(ctx)
-	if err != nil {
-		return err
-	}
-	for _, key := range keys {
-		if slices.Contains(key.AllowedModels, model.Alias) {
-			return fmt.Errorf("%w: model is referenced by a virtual key", ErrConflict)
-		}
-	}
-	return s.repository.DeleteModel(ctx, model)
+	return s.repository.DeleteProvider(ctx, provider)
 }
 
 func hashKey(key string) string {
@@ -446,23 +329,24 @@ func (s *Service) normalizeVirtualKeyInput(ctx context.Context, input VirtualKey
 	}
 	seen := make(map[string]struct{}, len(input.AllowedModels))
 	normalized := make([]string, 0, len(input.AllowedModels))
-	for _, alias := range input.AllowedModels {
-		alias = strings.TrimSpace(alias)
-		if _, duplicate := seen[alias]; duplicate {
+	for _, value := range input.AllowedModels {
+		model, err := ParseQualifiedModel(value)
+		if err != nil {
+			return input, &ValidationError{Field: "allowed_models", Message: err.Error()}
+		}
+		qualified := model.String()
+		if _, duplicate := seen[qualified]; duplicate {
 			continue
 		}
-		model, err := s.repository.GetModelByAlias(ctx, alias)
+		_, err = s.repository.GetProviderBySlug(ctx, model.ProviderSlug)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				return input, &ValidationError{Field: "allowed_models", Message: fmt.Sprintf("model alias %q does not exist", alias)}
+				return input, &ValidationError{Field: "allowed_models", Message: fmt.Sprintf("provider slug %q does not exist", model.ProviderSlug)}
 			}
 			return input, err
 		}
-		if model.Status != StatusActive && input.Status == StatusActive {
-			return input, &ValidationError{Field: "allowed_models", Message: fmt.Sprintf("model alias %q is disabled", alias)}
-		}
-		seen[alias] = struct{}{}
-		normalized = append(normalized, alias)
+		seen[qualified] = struct{}{}
+		normalized = append(normalized, qualified)
 	}
 	slices.Sort(normalized)
 	input.AllowedModels = normalized
@@ -541,70 +425,4 @@ func (s *Service) DeleteVirtualKey(ctx context.Context, id string) error {
 		return err
 	}
 	return s.repository.DeleteVirtualKey(ctx, key)
-}
-
-func (s *Service) Authorize(ctx context.Context, token, modelAlias string) (Authorization, error) {
-	if token == "" {
-		return Authorization{}, ErrUnauthorized
-	}
-	key, err := s.repository.GetVirtualKeyByHash(ctx, hashKey(token))
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return Authorization{}, ErrUnauthorized
-		}
-		return Authorization{}, err
-	}
-	if key.Status != StatusActive || (key.ExpiresAt != nil && !key.ExpiresAt.After(s.now())) {
-		return Authorization{}, ErrUnauthorized
-	}
-	user, err := s.repository.GetUser(ctx, key.UserID)
-	if err != nil || user.Status != StatusActive {
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return Authorization{}, err
-		}
-		return Authorization{}, ErrUnauthorized
-	}
-	model, err := s.repository.GetModelByAlias(ctx, modelAlias)
-	if err != nil || model.Status != StatusActive {
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return Authorization{}, err
-		}
-		return Authorization{}, ErrForbidden
-	}
-	if len(key.AllowedModels) > 0 && !slices.Contains(key.AllowedModels, modelAlias) {
-		return Authorization{}, ErrForbidden
-	}
-	return Authorization{KeyID: key.ID, UserID: key.UserID}, nil
-}
-
-func (s *Service) ResolveRoute(ctx context.Context, alias string) (Route, error) {
-	model, err := s.repository.GetModelByAlias(ctx, alias)
-	if err != nil {
-		return Route{}, err
-	}
-	if model.Status != StatusActive {
-		return Route{}, ErrForbidden
-	}
-	provider, err := s.repository.GetProvider(ctx, model.ProviderID)
-	if err != nil {
-		return Route{}, err
-	}
-	if provider.Status != StatusActive {
-		return Route{}, ErrForbidden
-	}
-	return Route{
-		Alias: model.Alias, ProviderID: provider.ID, UpstreamModel: model.UpstreamModel,
-		MaxOutputTokens: model.MaxOutputTokens, AdapterAppID: provider.AdapterAppID,
-	}, nil
-}
-
-func (s *Service) ResolveProvider(ctx context.Context, id string) (Provider, error) {
-	provider, err := s.repository.GetProvider(ctx, id)
-	if err != nil {
-		return Provider{}, err
-	}
-	if provider.Status != StatusActive {
-		return Provider{}, ErrForbidden
-	}
-	return provider, nil
 }

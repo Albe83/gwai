@@ -3,11 +3,12 @@ package ir
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"testing"
 )
 
 func TestPublishedSchemaIsValidJSONAndMatchesVersion(t *testing.T) {
-	data, err := os.ReadFile("../../api/ir/2026-07-01.schema.json")
+	data, err := os.ReadFile("../../api/ir/2026-07-11.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,5 +25,13 @@ func TestPublishedSchemaIsValidJSONAndMatchesVersion(t *testing.T) {
 	version := properties["version"].(map[string]any)["const"]
 	if version != Version {
 		t.Fatalf("schema version %v does not match Go version %s", version, Version)
+	}
+	requiredValues := request["required"].([]any)
+	required := make([]string, 0, len(requiredValues))
+	for _, value := range requiredValues {
+		required = append(required, value.(string))
+	}
+	if slices.Contains(required, "max_output_tokens") {
+		t.Fatal("schema must leave max_output_tokens to the provider adapter when omitted")
 	}
 }

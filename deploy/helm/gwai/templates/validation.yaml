@@ -4,3 +4,41 @@
 {{- if and .Values.valkey.enabled .Values.valkey.tls.enabled }}
 {{- fail "valkey.tls.enabled is only supported for an external Valkey endpoint (valkey.enabled=false)" }}
 {{- end }}
+{{- if eq (len .Values.anthropicAdapters) 0 }}
+{{- fail "at least one anthropicAdapters entry is required" }}
+{{- end }}
+{{- $names := dict }}
+{{- $slugs := dict }}
+{{- $appIDs := dict }}
+{{- range $index, $adapter := .Values.anthropicAdapters }}
+{{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $adapter.name) }}
+{{- fail (printf "anthropicAdapters[%d].name must be a lowercase DNS label" $index) }}
+{{- end }}
+{{- if hasKey $names $adapter.name }}
+{{- fail (printf "anthropicAdapters[%d].name must be unique" $index) }}
+{{- end }}
+{{- $_ := set $names $adapter.name true }}
+{{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $adapter.providerSlug) }}
+{{- fail (printf "anthropicAdapters[%d].providerSlug must be a lowercase DNS label" $index) }}
+{{- end }}
+{{- if hasKey $slugs $adapter.providerSlug }}
+{{- fail (printf "anthropicAdapters[%d].providerSlug must be unique" $index) }}
+{{- end }}
+{{- $_ := set $slugs $adapter.providerSlug true }}
+{{- if not (regexMatch "^[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?$" $adapter.appID) }}
+{{- fail (printf "anthropicAdapters[%d].appID must be a valid lowercase Dapr app ID" $index) }}
+{{- end }}
+{{- if hasKey $appIDs $adapter.appID }}
+{{- fail (printf "anthropicAdapters[%d].appID must be unique" $index) }}
+{{- end }}
+{{- $_ := set $appIDs $adapter.appID true }}
+{{- if le (int $adapter.defaultMaxOutputTokens) 0 }}
+{{- fail (printf "anthropicAdapters[%d].defaultMaxOutputTokens must be positive" $index) }}
+{{- end }}
+{{- if or (lt (int $adapter.maxOutputTokens) 0) (and (gt (int $adapter.maxOutputTokens) 0) (lt (int $adapter.maxOutputTokens) (int $adapter.defaultMaxOutputTokens))) }}
+{{- fail (printf "anthropicAdapters[%d].maxOutputTokens must be zero or at least defaultMaxOutputTokens" $index) }}
+{{- end }}
+{{- if eq (len $adapter.secretNames) 0 }}
+{{- fail (printf "anthropicAdapters[%d].secretNames must contain at least one Secret" $index) }}
+{{- end }}
+{{- end }}

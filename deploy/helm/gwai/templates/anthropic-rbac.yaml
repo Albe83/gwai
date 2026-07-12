@@ -1,29 +1,33 @@
-{{- if .Values.anthropicAdapter.secretNames }}
+{{- $root := . -}}
+{{- range $index, $adapter := .Values.anthropicAdapters }}
+{{- if $index }}
+---
+{{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "gwai.fullname" . }}-anthropic-secrets
+  name: {{ include "gwai.anthropicSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
   labels:
-    {{- include "gwai.labels" . | nindent 4 }}
+    {{- include "gwai.labels" $root | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames:
-      {{- toYaml .Values.anthropicAdapter.secretNames | nindent 6 }}
+      {{- toYaml $adapter.secretNames | nindent 6 }}
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "gwai.fullname" . }}-anthropic-secrets
+  name: {{ include "gwai.anthropicSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
   labels:
-    {{- include "gwai.labels" . | nindent 4 }}
+    {{- include "gwai.labels" $root | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "gwai.anthropicServiceAccountName" . }}
-    namespace: {{ .Release.Namespace }}
+    name: {{ include "gwai.anthropicServiceAccountName" (dict "root" $root "adapter" $adapter) }}
+    namespace: {{ $root.Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "gwai.fullname" . }}-anthropic-secrets
+  name: {{ include "gwai.anthropicSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
 {{- end }}

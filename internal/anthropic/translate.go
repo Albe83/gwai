@@ -53,15 +53,25 @@ func contentToAnthropic(content ir.Content) (ContentBlock, error) {
 	}
 }
 
-func ToMessageRequest(request ir.Request) (MessageRequest, error) {
+func ToMessageRequest(request ir.Request, defaultMaxOutputTokens, maxOutputTokens int) (MessageRequest, error) {
 	if err := request.Validate(); err != nil {
 		return MessageRequest{}, err
 	}
 	if request.Stream {
 		return MessageRequest{}, fmt.Errorf("streaming IR requests are not supported")
 	}
+	resolvedMaxOutputTokens := defaultMaxOutputTokens
+	if request.MaxOutputTokens != nil {
+		resolvedMaxOutputTokens = *request.MaxOutputTokens
+	}
+	if resolvedMaxOutputTokens <= 0 {
+		return MessageRequest{}, fmt.Errorf("max_output_tokens is required when the adapter has no positive default")
+	}
+	if maxOutputTokens > 0 && resolvedMaxOutputTokens > maxOutputTokens {
+		return MessageRequest{}, fmt.Errorf("max_output_tokens must not exceed %d", maxOutputTokens)
+	}
 	result := MessageRequest{
-		Model: request.Route.UpstreamModel, MaxTokens: request.MaxOutputTokens,
+		Model: request.Route.UpstreamModel, MaxTokens: resolvedMaxOutputTokens,
 		Temperature: request.Temperature, TopP: request.TopP,
 		StopSequences: request.Stop, Stream: false,
 	}

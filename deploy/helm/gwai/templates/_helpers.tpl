@@ -36,8 +36,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 
+{{- define "gwai.anthropicAdapterName" -}}
+{{- printf "%s-anthropic-%s" (include "gwai.fullname" .root) .adapter.name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{- define "gwai.anthropicServiceAccountName" -}}
-{{- printf "%s-anthropic-adapter" (include "gwai.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- printf "%s-sa" (include "gwai.anthropicAdapterName" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "gwai.anthropicSecretsRoleName" -}}
+{{- printf "%s-secrets" (include "gwai.anthropicAdapterName" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{- define "gwai.image" -}}

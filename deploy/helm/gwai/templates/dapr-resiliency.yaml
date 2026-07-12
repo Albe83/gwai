@@ -7,7 +7,9 @@ metadata:
     {{- include "gwai.labels" . | nindent 4 }}
 scopes:
   - {{ include "gwai.fullname" . }}-openai-gateway
-  - {{ include "gwai.fullname" . }}-anthropic-adapter
+  {{- range $adapter := .Values.anthropicAdapters }}
+  - {{ $adapter.appID | quote }}
+  {{- end }}
 spec:
   policies:
     retries:
@@ -19,8 +21,8 @@ spec:
         maxRetries: 40
   targets:
     apps:
-      {{ include "gwai.fullname" . }}-control-plane:
+      {{- range $adapter := .Values.anthropicAdapters }}
+      {{ $adapter.appID | quote }}:
         retry: DaprBuiltInServiceRetries
-      {{ include "gwai.fullname" . }}-anthropic-adapter:
-        retry: DaprBuiltInServiceRetries
+      {{- end }}
 {{- end }}

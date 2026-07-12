@@ -24,7 +24,7 @@ func (request Request) Validate() error {
 	if len(request.Messages) == 0 {
 		return fmt.Errorf("at least one message is required")
 	}
-	if request.MaxOutputTokens <= 0 {
+	if request.MaxOutputTokens != nil && *request.MaxOutputTokens <= 0 {
 		return fmt.Errorf("max_output_tokens must be positive")
 	}
 	for messageIndex, message := range request.Messages {

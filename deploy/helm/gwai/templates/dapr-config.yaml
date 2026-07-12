@@ -1,4 +1,5 @@
 {{- if .Values.dapr.enabled }}
+{{- $root := . -}}
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
@@ -16,39 +17,23 @@ spec:
   accessControl:
     defaultAction: deny
     trustDomain: public
-    policies:
-      - appId: {{ include "gwai.fullname" . }}-openai-gateway
-        namespace: {{ .Release.Namespace }}
-        trustDomain: public
-        defaultAction: deny
-        operations:
-          - name: /internal/v1/authorize
-            httpVerb: ["POST"]
-            action: allow
-          - name: /internal/v1/routes/resolve
-            httpVerb: ["POST"]
-            action: allow
-      - appId: {{ include "gwai.fullname" . }}-anthropic-adapter
-        namespace: {{ .Release.Namespace }}
-        trustDomain: public
-        defaultAction: deny
-        operations:
-          - name: /internal/v1/providers/resolve
-            httpVerb: ["POST"]
-            action: allow
+{{- range $adapter := .Values.anthropicAdapters }}
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
-  name: {{ include "gwai.fullname" . }}-anthropic-adapter
+  name: {{ include "gwai.anthropicAdapterName" (dict "root" $root "adapter" $adapter) }}
   labels:
-    {{- include "gwai.labels" . | nindent 4 }}
+    {{- include "gwai.labels" $root | nindent 4 }}
 spec:
   tracing:
-    samplingRate: {{ .Values.dapr.tracingSamplingRate | quote }}
+    samplingRate: {{ $root.Values.dapr.tracingSamplingRate | quote }}
   api:
     allowed:
       - name: invoke
+        version: v1.0
+        protocol: http
+      - name: state
         version: v1.0
         protocol: http
       - name: secrets
@@ -59,19 +44,20 @@ spec:
       - storeName: kubernetes
         defaultAccess: deny
         allowedSecrets:
-          {{- toYaml .Values.anthropicAdapter.secretNames | nindent 10 }}
+          {{- toYaml $adapter.secretNames | nindent 10 }}
   accessControl:
     defaultAction: deny
     trustDomain: public
     policies:
-      - appId: {{ include "gwai.fullname" . }}-openai-gateway
-        namespace: {{ .Release.Namespace }}
+      - appId: {{ include "gwai.fullname" $root }}-openai-gateway
+        namespace: {{ $root.Release.Namespace }}
         trustDomain: public
         defaultAction: deny
         operations:
           - name: /v1/generate
             httpVerb: ["POST"]
             action: allow
+{{- end }}
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
@@ -85,6 +71,9 @@ spec:
   api:
     allowed:
       - name: invoke
+        version: v1.0
+        protocol: http
+      - name: state
         version: v1.0
         protocol: http
 {{- end }}

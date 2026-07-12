@@ -39,6 +39,9 @@ make e2e-k3s
 Preserve the adapter boundary: client protocols translate to/from the IR and
 provider adapters translate to/from the same IR. Do not add direct
 client-provider converters or place provider credentials in IR payloads.
+Gateways and provider adapters read runtime entities directly from Dapr State
+Store; they must not invoke the control plane. Gateways address only the
+provider record's Dapr app ID and must not import provider-specific protocols.
 
 ## Contribution Policy
 

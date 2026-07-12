@@ -124,29 +124,32 @@ func TestOpenAIToAnthropicVerticalSlice(t *testing.T) {
 
 	repository := controlplane.NewRepository(state.NewMemoryStore())
 	controlService := controlplane.NewService(repository)
-	controlHandler := controlplane.NewHTTPHandler(controlService, "admin-test-token", "", 1<<20, logger)
+	runtime := controlplane.NewRuntime(repository)
+	controlHandler := controlplane.NewHTTPHandler(controlService, "admin-test-token", 1<<20, logger)
 	invoker := newLocalInvoker()
-	invoker.register("gwai-control-plane", controlHandler)
-	controlClient := controlplane.NewClient(invoker, "gwai-control-plane")
-
-	adapterHandler := anthropic.NewHTTPHandler(controlClient, staticSecrets{value: "anthropic-secret"}, providerServer.Client(), 10<<20, "", logger)
-	invoker.register("gwai-anthropic-adapter", adapterHandler)
-	gatewayHandler := openaiadapter.NewHTTPHandler(controlClient, invoker, 10<<20, time.Minute, logger)
+	adapterHandler := anthropic.NewHTTPHandler(
+		runtime, staticSecrets{value: "anthropic-secret"}, providerServer.Client(),
+		anthropic.Config{
+			ProviderSlug: "anthropic-test", AppID: "gwai-anthropic-test", MaxBody: 10 << 20,
+			DefaultMaxOutputTokens: 4096,
+		}, logger,
+	)
+	invoker.register("gwai-anthropic-test", adapterHandler)
+	gatewayHandler := openaiadapter.NewHTTPHandler(runtime, invoker, 10<<20, time.Minute, logger)
 
 	user := adminRequest[controlplane.User](t, controlHandler, http.MethodPost, "/v1/users", controlplane.UserInput{Name: "Ada", Email: "ada@example.com"})
 	provider := adminRequest[controlplane.Provider](t, controlHandler, http.MethodPost, "/v1/providers", controlplane.ProviderInput{
-		Name: "test Anthropic", Kind: "anthropic", BaseURL: providerServer.URL,
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic", Key: "api-key"},
+		Slug: "anthropic-test", Name: "test Anthropic", Kind: "anthropic", BaseURL: providerServer.URL,
+		AdapterAppID: "gwai-anthropic-test",
+		SecretRef:    daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic", Key: "api-key"},
 	})
-	model := adminRequest[controlplane.Model](t, controlHandler, http.MethodPost, "/v1/models", controlplane.ModelInput{
-		Alias: "claude", ProviderID: provider.ID, UpstreamModel: "claude-test", MaxOutputTokens: 1024,
-	})
+	qualifiedModel := provider.Slug + "/claude-test"
 	createdKey := adminRequest[controlplane.CreatedVirtualKey](t, controlHandler, http.MethodPost, "/v1/virtual-keys", controlplane.VirtualKeyInput{
-		Name: "client", UserID: user.ID, AllowedModels: []string{model.Alias},
+		Name: "client", UserID: user.ID, AllowedModels: []string{qualifiedModel},
 	})
 
 	requestBody := []byte(`{
-		"model":"claude",
+		"model":"anthropic-test/claude-test",
 		"messages":[
 			{"role":"system","content":"Rispondi in italiano"},
 			{"role":"user","content":"Saluta"}
@@ -165,7 +168,7 @@ func TestOpenAIToAnthropicVerticalSlice(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &completion); err != nil {
 		t.Fatal(err)
 	}
-	if completion.Model != "claude" || completion.Choices[0].Message.Content == nil || *completion.Choices[0].Message.Content != "Ciao dal provider" {
+	if completion.Model != qualifiedModel || completion.Choices[0].Message.Content == nil || *completion.Choices[0].Message.Content != "Ciao dal provider" {
 		t.Fatalf("unexpected completion: %+v", completion)
 	}
 	if completion.Usage.PromptTokens != 8 || completion.Usage.TotalTokens != 12 {

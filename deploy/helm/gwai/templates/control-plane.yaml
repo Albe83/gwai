@@ -27,15 +27,12 @@ spec:
         {{- if .Values.dapr.enabled }}
         dapr.io/enabled: "true"
         dapr.io/app-id: {{ include "gwai.fullname" . }}-control-plane
-        dapr.io/app-port: {{ .Values.controlPlane.port | quote }}
-        dapr.io/app-protocol: http
         dapr.io/config: {{ include "gwai.fullname" . }}-control-plane
         dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
         dapr.io/log-as-json: "true"
         dapr.io/enable-api-logging: {{ .Values.dapr.apiLogging | quote }}
         dapr.io/disable-builtin-k8s-secret-store: "true"
         dapr.io/api-token-secret: {{ include "gwai.daprAPISecretName" . }}
-        dapr.io/app-token-secret: {{ include "gwai.appAPISecretName" . }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -67,11 +64,6 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "gwai.daprAPISecretName" . }}
-                  key: token
-            - name: APP_API_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "gwai.appAPISecretName" . }}
                   key: token
           ports:
             - name: http

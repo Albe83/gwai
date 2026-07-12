@@ -9,15 +9,14 @@ import (
 )
 
 type HTTPHandler struct {
-	service       *Service
-	adminToken    string
-	internalToken string
-	maxBody       int64
-	logger        *slog.Logger
+	service    *Service
+	adminToken string
+	maxBody    int64
+	logger     *slog.Logger
 }
 
-func NewHTTPHandler(service *Service, adminToken, internalToken string, maxBody int64, logger *slog.Logger) http.Handler {
-	handler := &HTTPHandler{service: service, adminToken: adminToken, internalToken: internalToken, maxBody: maxBody, logger: logger}
+func NewHTTPHandler(service *Service, adminToken string, maxBody int64, logger *slog.Logger) http.Handler {
+	handler := &HTTPHandler{service: service, adminToken: adminToken, maxBody: maxBody, logger: logger}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /livez", handler.health)
@@ -35,33 +34,13 @@ func NewHTTPHandler(service *Service, adminToken, internalToken string, maxBody 
 	mux.Handle("PUT /v1/providers/{id}", handler.admin(http.HandlerFunc(handler.updateProvider)))
 	mux.Handle("DELETE /v1/providers/{id}", handler.admin(http.HandlerFunc(handler.deleteProvider)))
 
-	mux.Handle("POST /v1/models", handler.admin(http.HandlerFunc(handler.createModel)))
-	mux.Handle("GET /v1/models", handler.admin(http.HandlerFunc(handler.listModels)))
-	mux.Handle("GET /v1/models/{id}", handler.admin(http.HandlerFunc(handler.getModel)))
-	mux.Handle("PUT /v1/models/{id}", handler.admin(http.HandlerFunc(handler.updateModel)))
-	mux.Handle("DELETE /v1/models/{id}", handler.admin(http.HandlerFunc(handler.deleteModel)))
-
 	mux.Handle("POST /v1/virtual-keys", handler.admin(http.HandlerFunc(handler.createVirtualKey)))
 	mux.Handle("GET /v1/virtual-keys", handler.admin(http.HandlerFunc(handler.listVirtualKeys)))
 	mux.Handle("GET /v1/virtual-keys/{id}", handler.admin(http.HandlerFunc(handler.getVirtualKey)))
 	mux.Handle("PUT /v1/virtual-keys/{id}", handler.admin(http.HandlerFunc(handler.updateVirtualKey)))
 	mux.Handle("DELETE /v1/virtual-keys/{id}", handler.admin(http.HandlerFunc(handler.deleteVirtualKey)))
 
-	mux.Handle("POST /internal/v1/authorize", handler.internal(http.HandlerFunc(handler.authorize)))
-	mux.Handle("POST /internal/v1/routes/resolve", handler.internal(http.HandlerFunc(handler.resolveRoute)))
-	mux.Handle("POST /internal/v1/providers/resolve", handler.internal(http.HandlerFunc(handler.resolveProvider)))
-
 	return platform.HTTPMiddleware(logger, mux)
-}
-
-func (h *HTTPHandler) internal(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h.internalToken != "" && !platform.SecureEqual(r.Header.Get("dapr-api-token"), h.internalToken) {
-			platform.WriteProblem(w, r, http.StatusUnauthorized, "Unauthorized", "the endpoint is only available through the authenticated Dapr sidecar")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (h *HTTPHandler) admin(next http.Handler) http.Handler {
@@ -211,58 +190,6 @@ func (h *HTTPHandler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *HTTPHandler) createModel(w http.ResponseWriter, r *http.Request) {
-	var input ModelInput
-	if !h.decode(w, r, &input) {
-		return
-	}
-	model, err := h.service.CreateModel(r.Context(), input)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	platform.JSON(w, http.StatusCreated, model)
-}
-
-func (h *HTTPHandler) listModels(w http.ResponseWriter, r *http.Request) {
-	models, err := h.service.ListModels(r.Context())
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	platform.JSON(w, http.StatusOK, map[string]any{"data": models})
-}
-
-func (h *HTTPHandler) getModel(w http.ResponseWriter, r *http.Request) {
-	model, err := h.service.GetModel(r.Context(), r.PathValue("id"))
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	platform.JSON(w, http.StatusOK, model)
-}
-
-func (h *HTTPHandler) updateModel(w http.ResponseWriter, r *http.Request) {
-	var input ModelInput
-	if !h.decode(w, r, &input) {
-		return
-	}
-	model, err := h.service.UpdateModel(r.Context(), r.PathValue("id"), input)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	platform.JSON(w, http.StatusOK, model)
-}
-
-func (h *HTTPHandler) deleteModel(w http.ResponseWriter, r *http.Request) {
-	if err := h.service.DeleteModel(r.Context(), r.PathValue("id")); err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func (h *HTTPHandler) createVirtualKey(w http.ResponseWriter, r *http.Request) {
 	var input VirtualKeyInput
 	if !h.decode(w, r, &input) {
@@ -313,50 +240,4 @@ func (h *HTTPHandler) deleteVirtualKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *HTTPHandler) authorize(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Token string `json:"token"`
-		Model string `json:"model"`
-	}
-	if !h.decode(w, r, &input) {
-		return
-	}
-	authorization, err := h.service.Authorize(r.Context(), input.Token, input.Model)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	platform.JSON(w, http.StatusOK, authorization)
-}
-
-func (h *HTTPHandler) resolveRoute(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Alias string `json:"alias"`
-	}
-	if !h.decode(w, r, &input) {
-		return
-	}
-	route, err := h.service.ResolveRoute(r.Context(), input.Alias)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	platform.JSON(w, http.StatusOK, route)
-}
-
-func (h *HTTPHandler) resolveProvider(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		ID string `json:"id"`
-	}
-	if !h.decode(w, r, &input) {
-		return
-	}
-	provider, err := h.service.ResolveProvider(r.Context(), input.ID)
-	if err != nil {
-		h.writeError(w, r, err)
-		return
-	}
-	platform.JSON(w, http.StatusOK, provider)
 }

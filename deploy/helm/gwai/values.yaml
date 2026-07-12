@@ -67,22 +67,30 @@ openaiGateway:
       cpu: "1"
       memory: 512Mi
 
-anthropicAdapter:
-  replicas: 1
-  port: 8080
-  maxBodyBytes: 10485760
-  providerTimeout: 5m
-  # Kubernetes RBAC and the Dapr secret scope are restricted to these provider
-  # credential Secrets. Add names here before referencing them.
-  secretNames:
-    - gwai-anthropic
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: "1"
-      memory: 512Mi
+# Each configured provider account gets its own Dapr identity and adapter
+# workload. The provider record created through the admin API must use the same
+# providerSlug and appID values.
+anthropicAdapters:
+  - name: primary
+    providerSlug: anthropic
+    appID: gwai-anthropic
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    providerTimeout: 5m
+    defaultMaxOutputTokens: 4096
+    # Zero delegates the upper bound to Anthropic.
+    maxOutputTokens: 0
+    # Kubernetes RBAC and the Dapr secret scope are restricted per instance.
+    secretNames:
+      - gwai-anthropic
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
 
 valkey:
   enabled: true

@@ -17,8 +17,13 @@ type AdapterInvoker interface {
 	InvokeJSON(context.Context, string, string, any, any) error
 }
 
+type Runtime interface {
+	Authorize(context.Context, string, string) (controlplane.Authorization, error)
+	ResolveRoute(context.Context, string) (controlplane.Route, error)
+}
+
 type HTTPHandler struct {
-	controlPlane   controlplane.Runtime
+	runtime        Runtime
 	invoker        AdapterInvoker
 	maxBody        int64
 	requestTimeout time.Duration
@@ -26,9 +31,9 @@ type HTTPHandler struct {
 	now            func() time.Time
 }
 
-func NewHTTPHandler(controlPlane controlplane.Runtime, invoker AdapterInvoker, maxBody int64, requestTimeout time.Duration, logger *slog.Logger) http.Handler {
+func NewHTTPHandler(runtime Runtime, invoker AdapterInvoker, maxBody int64, requestTimeout time.Duration, logger *slog.Logger) http.Handler {
 	handler := &HTTPHandler{
-		controlPlane: controlPlane, invoker: invoker, maxBody: maxBody,
+		runtime: runtime, invoker: invoker, maxBody: maxBody,
 		requestTimeout: requestTimeout, logger: logger, now: func() time.Time { return time.Now().UTC() },
 	}
 	mux := http.NewServeMux()
@@ -52,10 +57,13 @@ func (h *HTTPHandler) writeAPIError(w http.ResponseWriter, status int, errorType
 
 func (h *HTTPHandler) writeRuntimeError(w http.ResponseWriter, r *http.Request, err error) {
 	var translation *TranslationError
+	var validation *controlplane.ValidationError
 	var daprError *daprhttp.HTTPError
 	switch {
 	case errors.As(err, &translation):
 		h.writeAPIError(w, http.StatusBadRequest, "invalid_request_error", translation.Code, translation.Message, translation.Param)
+	case errors.As(err, &validation):
+		h.writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_model", validation.Error(), validation.Field)
 	case errors.Is(err, controlplane.ErrUnauthorized):
 		w.Header().Set("WWW-Authenticate", `Bearer realm="gwai"`)
 		h.writeAPIError(w, http.StatusUnauthorized, "authentication_error", "invalid_api_key", "Incorrect API key provided", "")
@@ -90,11 +98,11 @@ func (h *HTTPHandler) createChatCompletion(w http.ResponseWriter, r *http.Reques
 		ctx, cancel = context.WithTimeout(ctx, h.requestTimeout)
 		defer cancel()
 	}
-	if _, err := h.controlPlane.Authorize(ctx, token, request.Model); err != nil {
+	if _, err := h.runtime.Authorize(ctx, token, request.Model); err != nil {
 		h.writeRuntimeError(w, r, err)
 		return
 	}
-	route, err := h.controlPlane.ResolveRoute(ctx, request.Model)
+	route, err := h.runtime.ResolveRoute(ctx, request.Model)
 	if err != nil {
 		h.writeRuntimeError(w, r, err)
 		return
