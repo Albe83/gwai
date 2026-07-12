@@ -9,8 +9,9 @@ import (
 
 func TestToMessageRequestMapsSystemAndToolMessages(t *testing.T) {
 	strict := true
+	maxOutputTokens := 100
 	request := ir.Request{
-		Version: ir.Version, ID: "req_1", Route: ir.Route{ProviderID: "p", UpstreamModel: "claude-test"}, MaxOutputTokens: 100,
+		Version: ir.Version, ID: "req_1", Route: ir.Route{ProviderID: "p", UpstreamModel: "claude-test"}, MaxOutputTokens: &maxOutputTokens,
 		Messages: []ir.Message{
 			{Role: ir.RoleSystem, Content: []ir.Content{{Type: ir.ContentText, Text: "Be concise"}}},
 			{Role: ir.RoleUser, Content: []ir.Content{{Type: ir.ContentText, Text: "Weather?"}}},
@@ -20,7 +21,7 @@ func TestToMessageRequestMapsSystemAndToolMessages(t *testing.T) {
 		Tools:      []ir.Tool{{Name: "weather", InputSchema: json.RawMessage(`{"type":"object"}`), Strict: &strict}},
 		ToolChoice: &ir.ToolChoice{Mode: "required", DisableParallel: true},
 	}
-	result, err := ToMessageRequest(request)
+	result, err := ToMessageRequest(request, 4096, 8192)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,6 +36,25 @@ func TestToMessageRequestMapsSystemAndToolMessages(t *testing.T) {
 	}
 	if result.Tools[0].Strict == nil || !*result.Tools[0].Strict || !result.ToolChoice.DisableParallelToolUse {
 		t.Fatalf("strict/parallel controls were not preserved: tools=%+v choice=%+v", result.Tools, result.ToolChoice)
+	}
+}
+
+func TestToMessageRequestUsesAdapterTokenDefaultAndLimit(t *testing.T) {
+	request := ir.Request{
+		Version: ir.Version, ID: "req_1", Route: ir.Route{ProviderID: "p", UpstreamModel: "claude-test"},
+		Messages: []ir.Message{{Role: ir.RoleUser, Content: []ir.Content{{Type: ir.ContentText, Text: "hello"}}}},
+	}
+	result, err := ToMessageRequest(request, 4096, 8192)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MaxTokens != 4096 {
+		t.Fatalf("expected adapter default, got %d", result.MaxTokens)
+	}
+	tooLarge := 9000
+	request.MaxOutputTokens = &tooLarge
+	if _, err := ToMessageRequest(request, 4096, 8192); err == nil {
+		t.Fatal("expected adapter token limit to be enforced")
 	}
 }
 

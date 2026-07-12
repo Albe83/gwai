@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gwai.dev/schema/ir/2026-07-01",
-  "title": "gwai generation IR 2026-07-01",
+  "$id": "https://gwai.dev/schema/ir/2026-07-11",
+  "title": "gwai generation IR 2026-07-11",
   "oneOf": [
     { "$ref": "#/$defs/request" },
     { "$ref": "#/$defs/response" }
@@ -147,11 +147,10 @@
         "version",
         "id",
         "route",
-        "messages",
-        "max_output_tokens"
+        "messages"
       ],
       "properties": {
-        "version": { "const": "2026-07-01" },
+        "version": { "const": "2026-07-11" },
         "id": { "type": "string", "minLength": 1 },
         "route": { "$ref": "#/$defs/route" },
         "messages": {
@@ -197,7 +196,7 @@
         "usage"
       ],
       "properties": {
-        "version": { "const": "2026-07-01" },
+        "version": { "const": "2026-07-11" },
         "id": { "type": "string", "minLength": 1 },
         "model": { "type": "string", "minLength": 1 },
         "content": {

@@ -23,6 +23,14 @@ spec:
       value: {{ .Values.valkey.tls.enabled | quote }}
     - name: actorStateStore
       value: "false"
+    # Runtime entities are intentionally shared by the control plane, gateways,
+    # and provider adapters. The default app-id prefix would isolate their keys.
+    - name: keyPrefix
+      value: "name"
 scopes:
   - {{ include "gwai.fullname" . }}-control-plane
+  - {{ include "gwai.fullname" . }}-openai-gateway
+  {{- range $adapter := .Values.anthropicAdapters }}
+  - {{ $adapter.appID | quote }}
+  {{- end }}
 {{- end }}

@@ -26,7 +26,7 @@ func TestToIRTranslatesMessagesImagesAndTools(t *testing.T) {
 		ToolChoice:        json.RawMessage(`{"type":"function","function":{"name":"weather"}}`),
 		ParallelToolCalls: &parallel,
 	}
-	route := controlplane.Route{ProviderID: "prv_1", UpstreamModel: "claude-test", MaxOutputTokens: 1000}
+	route := controlplane.Route{ProviderID: "prv_1", UpstreamModel: "claude-test"}
 	result, err := ToIR(request, route, "req_1")
 	if err != nil {
 		t.Fatal(err)
@@ -46,11 +46,14 @@ func TestToIRTranslatesMessagesImagesAndTools(t *testing.T) {
 	if result.Tools[0].Strict == nil || !*result.Tools[0].Strict || !result.ToolChoice.DisableParallel {
 		t.Fatalf("strict/parallel tool controls were not preserved: tools=%+v choice=%+v", result.Tools, result.ToolChoice)
 	}
+	if result.MaxOutputTokens == nil || *result.MaxOutputTokens != maxTokens {
+		t.Fatalf("max output tokens were not preserved: %+v", result.MaxOutputTokens)
+	}
 }
 
 func TestToIRRejectsUnsupportedStreaming(t *testing.T) {
 	request := ChatCompletionRequest{Model: "m", Stream: true, Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}}}
-	_, err := ToIR(request, controlplane.Route{ProviderID: "p", UpstreamModel: "m", MaxOutputTokens: 10}, "r")
+	_, err := ToIR(request, controlplane.Route{ProviderID: "p", UpstreamModel: "m"}, "r")
 	var translation *TranslationError
 	if !errors.As(err, &translation) || translation.Param != "stream" {
 		t.Fatalf("expected stream translation error, got %v", err)
@@ -58,7 +61,7 @@ func TestToIRRejectsUnsupportedStreaming(t *testing.T) {
 }
 
 func TestToIRRejectsKnownUnmappedParameters(t *testing.T) {
-	route := controlplane.Route{ProviderID: "p", UpstreamModel: "m", MaxOutputTokens: 10}
+	route := controlplane.Route{ProviderID: "p", UpstreamModel: "m"}
 	tests := []struct {
 		name  string
 		param string
@@ -88,10 +91,23 @@ func TestToIRRejectsMissingNamedTool(t *testing.T) {
 		Tools:      []Tool{{Type: "function", Function: FunctionTool{Name: "weather", Parameters: json.RawMessage(`{"type":"object"}`)}}},
 		ToolChoice: json.RawMessage(`{"type":"function","function":{"name":"unknown"}}`),
 	}
-	_, err := ToIR(request, controlplane.Route{ProviderID: "p", UpstreamModel: "m", MaxOutputTokens: 10}, "r")
+	_, err := ToIR(request, controlplane.Route{ProviderID: "p", UpstreamModel: "m"}, "r")
 	var translation *TranslationError
 	if !errors.As(err, &translation) || translation.Param != "tool_choice" {
 		t.Fatalf("expected tool_choice translation error, got %v", err)
+	}
+}
+
+func TestToIROmitsAdapterOwnedOutputTokenDefault(t *testing.T) {
+	request := ChatCompletionRequest{
+		Model: "provider/model", Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+	}
+	result, err := ToIR(request, controlplane.Route{ProviderID: "p", UpstreamModel: "model"}, "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MaxOutputTokens != nil {
+		t.Fatalf("expected adapter-owned token default, got %d", *result.MaxOutputTokens)
 	}
 }
 

@@ -1,0 +1,27 @@
+anthropicAdapters:
+  - name: team-a
+    providerSlug: team-a
+    appID: gwai-team-a
+    replicas: 2
+    port: 8080
+    maxBodyBytes: 10485760
+    providerTimeout: 5m
+    defaultMaxOutputTokens: 4096
+    maxOutputTokens: 8192
+    secretNames: [anthropic-team-a]
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: "1", memory: 512Mi}
+  - name: team-b
+    providerSlug: team-b
+    appID: gwai-team-b
+    replicas: 1
+    port: 8080
+    maxBodyBytes: 10485760
+    providerTimeout: 5m
+    defaultMaxOutputTokens: 2048
+    maxOutputTokens: 0
+    secretNames: [anthropic-team-b]
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: "1", memory: 512Mi}

@@ -293,56 +293,39 @@ func (r *Repository) DeleteUser(ctx context.Context, user User) error {
 	return deleteResource(ctx, r, "users", user.ID, userLookups(user))
 }
 
+func providerLookups(provider Provider) map[string]string {
+	return map[string]string{
+		lookupKey("provider-slug", provider.Slug):                   provider.ID,
+		lookupKey("provider-adapter-app-id", provider.AdapterAppID): provider.ID,
+	}
+}
+
 func (r *Repository) CreateProvider(ctx context.Context, provider Provider) error {
-	return createResource(ctx, r, "providers", provider.ID, provider, nil)
+	return createResource(ctx, r, "providers", provider.ID, provider, providerLookups(provider))
 }
 
 func (r *Repository) GetProvider(ctx context.Context, id string) (Provider, error) {
 	return getResource[Provider](ctx, r, "providers", id)
 }
 
+func (r *Repository) GetProviderBySlug(ctx context.Context, slug string) (Provider, error) {
+	id, err := r.lookup(ctx, "provider-slug", slug)
+	if err != nil {
+		return Provider{}, err
+	}
+	return r.GetProvider(ctx, id)
+}
+
 func (r *Repository) ListProviders(ctx context.Context) ([]Provider, error) {
 	return listResources[Provider](ctx, r, "providers")
 }
 
-func (r *Repository) ReplaceProvider(ctx context.Context, provider Provider) error {
-	return replaceResource(ctx, r, "providers", provider.ID, provider, nil, nil)
+func (r *Repository) ReplaceProvider(ctx context.Context, oldProvider, provider Provider) error {
+	return replaceResource(ctx, r, "providers", provider.ID, provider, providerLookups(oldProvider), providerLookups(provider))
 }
 
-func (r *Repository) DeleteProvider(ctx context.Context, id string) error {
-	return deleteResource(ctx, r, "providers", id, nil)
-}
-
-func modelLookups(model Model) map[string]string {
-	return map[string]string{lookupKey("model-alias", model.Alias): model.ID}
-}
-
-func (r *Repository) CreateModel(ctx context.Context, model Model) error {
-	return createResource(ctx, r, "models", model.ID, model, modelLookups(model))
-}
-
-func (r *Repository) GetModel(ctx context.Context, id string) (Model, error) {
-	return getResource[Model](ctx, r, "models", id)
-}
-
-func (r *Repository) GetModelByAlias(ctx context.Context, alias string) (Model, error) {
-	id, err := r.lookup(ctx, "model-alias", alias)
-	if err != nil {
-		return Model{}, err
-	}
-	return r.GetModel(ctx, id)
-}
-
-func (r *Repository) ListModels(ctx context.Context) ([]Model, error) {
-	return listResources[Model](ctx, r, "models")
-}
-
-func (r *Repository) ReplaceModel(ctx context.Context, oldModel, model Model) error {
-	return replaceResource(ctx, r, "models", model.ID, model, modelLookups(oldModel), modelLookups(model))
-}
-
-func (r *Repository) DeleteModel(ctx context.Context, model Model) error {
-	return deleteResource(ctx, r, "models", model.ID, modelLookups(model))
+func (r *Repository) DeleteProvider(ctx context.Context, provider Provider) error {
+	return deleteResource(ctx, r, "providers", provider.ID, providerLookups(provider))
 }
 
 func virtualKeyLookups(key VirtualKey) map[string]string {

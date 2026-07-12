@@ -1,41 +1,49 @@
+{{- $root := . -}}
+{{- range $index, $adapter := .Values.anthropicAdapters }}
+{{- if $index }}
+---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "gwai.fullname" . }}-anthropic-adapter
+  name: {{ include "gwai.anthropicAdapterName" (dict "root" $root "adapter" $adapter) }}
   labels:
-    {{- include "gwai.labels" . | nindent 4 }}
+    {{- include "gwai.labels" $root | nindent 4 }}
     app.kubernetes.io/component: anthropic-adapter
+    gwai.dev/provider: {{ $adapter.name | quote }}
 spec:
-  replicas: {{ .Values.anthropicAdapter.replicas }}
+  replicas: {{ $adapter.replicas }}
   selector:
     matchLabels:
-      {{- include "gwai.selectorLabels" . | nindent 6 }}
+      {{- include "gwai.selectorLabels" $root | nindent 6 }}
       app.kubernetes.io/component: anthropic-adapter
+      gwai.dev/provider: {{ $adapter.name | quote }}
   template:
     metadata:
       labels:
-        {{- include "gwai.selectorLabels" . | nindent 8 }}
+        {{- include "gwai.selectorLabels" $root | nindent 8 }}
         app.kubernetes.io/component: anthropic-adapter
+        gwai.dev/provider: {{ $adapter.name | quote }}
       annotations:
-        checksum/dapr-token-secrets: {{ include (print $.Template.BasePath "/dapr-token-secrets.yaml") . | sha256sum }}
-        {{- if .Values.dapr.enabled }}
+        checksum/dapr-token-secrets: {{ include (print $root.Template.BasePath "/dapr-token-secrets.yaml") $root | sha256sum }}
+        {{- if $root.Values.dapr.enabled }}
         dapr.io/enabled: "true"
-        dapr.io/app-id: {{ include "gwai.fullname" . }}-anthropic-adapter
-        dapr.io/app-port: {{ .Values.anthropicAdapter.port | quote }}
+        dapr.io/app-id: {{ $adapter.appID | quote }}
+        dapr.io/app-port: {{ $adapter.port | quote }}
         dapr.io/app-protocol: http
-        dapr.io/config: {{ include "gwai.fullname" . }}-anthropic-adapter
-        dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
+        dapr.io/config: {{ include "gwai.anthropicAdapterName" (dict "root" $root "adapter" $adapter) }}
+        dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
         dapr.io/log-as-json: "true"
-        dapr.io/enable-api-logging: {{ .Values.dapr.apiLogging | quote }}
+        dapr.io/enable-api-logging: {{ $root.Values.dapr.apiLogging | quote }}
         dapr.io/max-body-size: "16Mi"
-        dapr.io/api-token-secret: {{ include "gwai.daprAPISecretName" . }}
-        dapr.io/app-token-secret: {{ include "gwai.appAPISecretName" . }}
+        dapr.io/api-token-secret: {{ include "gwai.daprAPISecretName" $root }}
+        dapr.io/app-token-secret: {{ include "gwai.appAPISecretName" $root }}
         {{- end }}
-        {{- with .Values.podAnnotations }}
+        {{- with $root.Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "gwai.anthropicServiceAccountName" . }}
+      serviceAccountName: {{ include "gwai.anthropicServiceAccountName" (dict "root" $root "adapter" $adapter) }}
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
@@ -43,30 +51,38 @@ spec:
           type: RuntimeDefault
       containers:
         - name: anthropic-adapter
-          image: {{ include "gwai.image" (dict "root" . "repository" .Values.images.anthropicAdapter.repository) }}
-          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          image: {{ include "gwai.image" (dict "root" $root "repository" $root.Values.images.anthropicAdapter.repository) }}
+          imagePullPolicy: {{ $root.Values.global.image.pullPolicy }}
           env:
             - name: PORT
-              value: {{ .Values.anthropicAdapter.port | quote }}
-            - name: GWAI_CONTROL_PLANE_APP_ID
-              value: {{ include "gwai.fullname" . }}-control-plane
+              value: {{ $adapter.port | quote }}
+            - name: GWAI_STATE_STORE
+              value: {{ $root.Values.dapr.stateStoreName | quote }}
+            - name: GWAI_PROVIDER_SLUG
+              value: {{ $adapter.providerSlug | quote }}
+            - name: GWAI_ADAPTER_APP_ID
+              value: {{ $adapter.appID | quote }}
             - name: GWAI_MAX_BODY_BYTES
-              value: {{ int64 .Values.anthropicAdapter.maxBodyBytes | quote }}
+              value: {{ int64 $adapter.maxBodyBytes | quote }}
             - name: GWAI_PROVIDER_TIMEOUT
-              value: {{ .Values.anthropicAdapter.providerTimeout | quote }}
+              value: {{ $adapter.providerTimeout | quote }}
+            - name: GWAI_DEFAULT_MAX_OUTPUT_TOKENS
+              value: {{ int64 $adapter.defaultMaxOutputTokens | quote }}
+            - name: GWAI_MAX_OUTPUT_TOKENS
+              value: {{ int64 $adapter.maxOutputTokens | quote }}
             - name: DAPR_API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "gwai.daprAPISecretName" . }}
+                  name: {{ include "gwai.daprAPISecretName" $root }}
                   key: token
             - name: APP_API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "gwai.appAPISecretName" . }}
+                  name: {{ include "gwai.appAPISecretName" $root }}
                   key: token
           ports:
             - name: http
-              containerPort: {{ .Values.anthropicAdapter.port }}
+              containerPort: {{ $adapter.port }}
           livenessProbe:
             httpGet:
               path: /livez
@@ -83,16 +99,17 @@ spec:
             capabilities:
               drop: ["ALL"]
           resources:
-            {{- toYaml .Values.anthropicAdapter.resources | nindent 12 }}
-      {{- with .Values.nodeSelector }}
+            {{- toYaml $adapter.resources | nindent 12 }}
+      {{- with $root.Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with $root.Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with $root.Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end }}

@@ -48,8 +48,8 @@ spec:
           env:
             - name: PORT
               value: {{ .Values.openaiGateway.port | quote }}
-            - name: GWAI_CONTROL_PLANE_APP_ID
-              value: {{ include "gwai.fullname" . }}-control-plane
+            - name: GWAI_STATE_STORE
+              value: {{ .Values.dapr.stateStoreName | quote }}
             - name: GWAI_MAX_BODY_BYTES
               value: {{ int64 .Values.openaiGateway.maxBodyBytes | quote }}
             - name: GWAI_REQUEST_TIMEOUT

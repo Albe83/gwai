@@ -63,6 +63,7 @@ e2e-k3s:
 
 helm-lint:
 	$(HELM) lint deploy/helm/gwai
+	$(HELM) lint deploy/helm/gwai -f deploy/helm/gwai/ci/multi-provider-values.yaml
 
 deploy:
 	$(HELM) upgrade --install gwai deploy/helm/gwai \

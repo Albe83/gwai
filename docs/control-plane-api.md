@@ -7,26 +7,47 @@ bodies reject unknown fields. Errors use `application/problem+json`.
 | --- | --- | --- |
 | Users | `POST, GET /v1/users` | `GET, PUT, DELETE /v1/users/{id}` |
 | Providers | `POST, GET /v1/providers` | `GET, PUT, DELETE /v1/providers/{id}` |
-| Models | `POST, GET /v1/models` | `GET, PUT, DELETE /v1/models/{id}` |
 | Virtual keys | `POST, GET /v1/virtual-keys` | `GET, PUT, DELETE /v1/virtual-keys/{id}` |
 
 `PUT` is a complete replacement of editable fields. IDs and timestamps remain
 server-owned. Status is `active` or `disabled`.
 
-## Relationships
+## Providers and routing
 
-- A virtual key references an existing user and optionally lists allowed model
-  aliases. An empty allowlist means every active model.
-- User email addresses are normalized to lowercase and are unique.
-- A model alias is unique and references one provider.
-- A provider selects a provider kind, Dapr adapter app ID, endpoint, API
-  version, and secret reference.
-- A user with keys, provider with models, or model named by a key cannot be
-  deleted until its dependents are removed.
+A provider contains a unique lowercase DNS-label `slug` and an explicit Dapr
+`adapter_app_id`:
 
-## Virtual-key creation
+```json
+{
+  "slug": "anthropic",
+  "name": "Anthropic primary",
+  "kind": "anthropic",
+  "adapter_app_id": "gwai-anthropic",
+  "base_url": "https://api.anthropic.com",
+  "api_version": "2023-06-01",
+  "secret_ref": {
+    "store": "kubernetes",
+    "name": "gwai-anthropic",
+    "key": "api-key"
+  }
+}
+```
 
-Creation returns:
+`slug` and `adapter_app_id` are unique, immutable, and must match one Helm adapter
+instance. Endpoint, API version, secret reference, name, and status remain
+editable. User email addresses are also unique.
+
+There is no model catalog. Clients address any upstream model as
+`provider-slug/upstream-model`; only the first `/` is structural, so an upstream
+model ID may itself contain `/`.
+
+## Virtual keys
+
+`allowed_models` contains exact qualified model names. Each referenced provider
+slug must exist when the key is created or updated. An empty list permits every
+model reachable through an active provider.
+
+Creation returns the plaintext once:
 
 ```json
 {
@@ -35,22 +56,20 @@ Creation returns:
     "name": "local",
     "user_id": "usr_...",
     "prefix": "gwai_...",
+    "allowed_models": ["anthropic/claude-sonnet"],
     "status": "active"
   },
   "key": "gwai_one_time_secret"
 }
 ```
 
-The `key` member is never returned again. List, get, and update responses expose
-only metadata and the display prefix.
+The `key` member is never returned again. A user cannot be deleted while it has
+virtual keys. Deleting a provider makes its qualified names unroutable but does
+not rewrite virtual-key allowlists.
 
-## Internal endpoints
+## Runtime boundary
 
-The data plane uses three Dapr-only operations:
-
-- `POST /internal/v1/authorize`
-- `POST /internal/v1/routes/resolve`
-- `POST /internal/v1/providers/resolve`
-
-They require the Dapr app token, and Dapr ACLs permit only the exact calling app
-IDs and methods. They are not an administrative API.
+The control plane exposes no internal authorization or route-resolution HTTP
+API. Gateway and adapter processes use a read-only runtime interface over the
+Dapr State Store; only administrative mutations cross the control-plane HTTP
+boundary.

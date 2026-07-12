@@ -5,7 +5,7 @@ package ir
 
 import "encoding/json"
 
-const Version = "2026-07-01"
+const Version = "2026-07-11"
 
 const (
 	RoleSystem    = "system"
@@ -31,7 +31,7 @@ type Request struct {
 	ID              string         `json:"id"`
 	Route           Route          `json:"route"`
 	Messages        []Message      `json:"messages"`
-	MaxOutputTokens int            `json:"max_output_tokens"`
+	MaxOutputTokens *int           `json:"max_output_tokens,omitempty"`
 	Temperature     *float64       `json:"temperature,omitempty"`
 	TopP            *float64       `json:"top_p,omitempty"`
 	Stop            []string       `json:"stop,omitempty"`

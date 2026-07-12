@@ -7,6 +7,7 @@ import (
 )
 
 func validRequest() Request {
+	maxOutputTokens := 10
 	return Request{
 		Version: Version,
 		ID:      "req_1",
@@ -14,7 +15,15 @@ func validRequest() Request {
 		Messages: []Message{{
 			Role: RoleUser, Content: []Content{{Type: ContentText, Text: "hello"}},
 		}},
-		MaxOutputTokens: 10,
+		MaxOutputTokens: &maxOutputTokens,
+	}
+}
+
+func TestRequestValidationAllowsAdapterDefaultOutputTokens(t *testing.T) {
+	request := validRequest()
+	request.MaxOutputTokens = nil
+	if err := request.Validate(); err != nil {
+		t.Fatalf("expected omitted max_output_tokens to be valid, got %v", err)
 	}
 }
 

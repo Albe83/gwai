@@ -28,7 +28,7 @@ func run() error {
 	store := daprhttp.NewStateStore(daprClient, platform.Env("GWAI_STATE_STORE", "gwai-state"))
 	repository := controlplane.NewRepository(store)
 	service := controlplane.NewService(repository)
-	handler := controlplane.NewHTTPHandler(service, adminToken, os.Getenv("APP_API_TOKEN"), maxBody, logger)
+	handler := controlplane.NewHTTPHandler(service, adminToken, maxBody, logger)
 
 	server := &http.Server{
 		Addr:              ":" + port,
