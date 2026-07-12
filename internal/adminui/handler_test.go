@@ -22,18 +22,22 @@ type fakeAPI struct {
 	mu                     sync.Mutex
 	users                  []controlplane.User
 	providers              []controlplane.Provider
+	models                 []controlplane.Model
 	keys                   []controlplane.PublicVirtualKey
 	secret                 string
 	errors                 map[string]error
 	calls                  []string
 	lastUserInput          controlplane.UserInput
 	lastProviderInput      controlplane.ProviderInput
+	lastModelInput         controlplane.ModelInput
 	lastKeyInput           controlplane.VirtualKeyInput
 	lastUserETag           string
 	lastProviderETag       string
+	lastModelETag          string
 	lastKeyETag            string
 	lastDeleteUserETag     string
 	lastDeleteProviderETag string
+	lastDeleteModelETag    string
 	lastDeleteKeyETag      string
 }
 
@@ -175,6 +179,73 @@ func (f *fakeAPI) DeleteProvider(_ context.Context, id, etag string) error {
 	return nil
 }
 
+func (f *fakeAPI) ListModels(context.Context) ([]controlplane.Model, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("ListModels"); err != nil {
+		return nil, err
+	}
+	return slices.Clone(f.models), nil
+}
+
+func (f *fakeAPI) GetModel(_ context.Context, id string) (Versioned[controlplane.Model], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("GetModel"); err != nil {
+		return Versioned[controlplane.Model]{}, err
+	}
+	for _, value := range f.models {
+		if value.ID == id {
+			return Versioned[controlplane.Model]{Value: value, ETag: fakeETag}, nil
+		}
+	}
+	return Versioned[controlplane.Model]{}, &APIError{Status: http.StatusNotFound, Title: "Not found"}
+}
+
+func (f *fakeAPI) CreateModel(_ context.Context, input controlplane.ModelInput) (controlplane.Model, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("CreateModel"); err != nil {
+		return controlplane.Model{}, err
+	}
+	f.lastModelInput = input
+	value := controlplane.Model{
+		ID: "mdl_created", Alias: input.Alias, ProviderID: input.ProviderID,
+		UpstreamModel: input.UpstreamModel, Status: input.Status, Revision: 1,
+	}
+	f.models = append(f.models, value)
+	return value, nil
+}
+
+func (f *fakeAPI) UpdateModel(_ context.Context, id string, input controlplane.ModelInput, etag string) (Versioned[controlplane.Model], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("UpdateModel"); err != nil {
+		return Versioned[controlplane.Model]{}, err
+	}
+	f.lastModelInput, f.lastModelETag = input, etag
+	for index := range f.models {
+		if f.models[index].ID == id {
+			current := &f.models[index]
+			current.ProviderID, current.UpstreamModel, current.Status = input.ProviderID, input.UpstreamModel, input.Status
+			current.Revision++
+			return Versioned[controlplane.Model]{Value: *current, ETag: fakeETag}, nil
+		}
+	}
+	return Versioned[controlplane.Model]{}, &APIError{Status: http.StatusNotFound, Title: "Not found"}
+}
+
+func (f *fakeAPI) DeleteModel(_ context.Context, id, etag string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("DeleteModel"); err != nil {
+		return err
+	}
+	f.lastDeleteModelETag = etag
+	f.models = slices.DeleteFunc(f.models, func(value controlplane.Model) bool { return value.ID == id })
+	return nil
+}
+
 func (f *fakeAPI) ListVirtualKeys(context.Context) ([]controlplane.PublicVirtualKey, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -205,7 +276,7 @@ func (f *fakeAPI) CreateVirtualKey(_ context.Context, input controlplane.Virtual
 		return controlplane.CreatedVirtualKey{}, err
 	}
 	f.lastKeyInput = input
-	value := controlplane.PublicVirtualKey{ID: "key_created", Name: input.Name, UserID: input.UserID, Prefix: "gwai_created", AllowedModels: input.AllowedModels, Status: input.Status, ExpiresAt: input.ExpiresAt}
+	value := controlplane.PublicVirtualKey{ID: "key_created", Name: input.Name, UserID: input.UserID, Prefix: "gwai_created", ModelIDs: input.ModelIDs, Status: input.Status, ExpiresAt: input.ExpiresAt}
 	f.keys = append(f.keys, value)
 	return controlplane.CreatedVirtualKey{VirtualKey: value, Key: f.secret}, nil
 }
@@ -221,7 +292,7 @@ func (f *fakeAPI) UpdateVirtualKey(_ context.Context, id string, input controlpl
 	for index := range f.keys {
 		if f.keys[index].ID == id {
 			current := &f.keys[index]
-			current.Name, current.UserID, current.AllowedModels, current.Status, current.ExpiresAt = input.Name, input.UserID, input.AllowedModels, input.Status, input.ExpiresAt
+			current.Name, current.UserID, current.ModelIDs, current.Status, current.ExpiresAt = input.Name, input.UserID, input.ModelIDs, input.Status, input.ExpiresAt
 			return Versioned[controlplane.PublicVirtualKey]{Value: *current, ETag: fakeETag}, nil
 		}
 	}
@@ -471,6 +542,7 @@ func TestCompleteCRUDLifecycleAndOneTimeReveal(t *testing.T) {
 	api := &fakeAPI{
 		users:     []controlplane.User{{ID: "usr_one", Name: "Ada", Email: "ada@example.com", Status: controlplane.StatusActive, Revision: 1}},
 		providers: []controlplane.Provider{{ID: "prv_one", Slug: "anthropic", Name: "Anthropic", Kind: controlplane.ProviderKindAnthropic, BaseURL: "https://api.anthropic.com", APIVersion: "2023-06-01", AdapterAppID: "gwai-anthropic", Status: controlplane.StatusActive}},
+		models:    []controlplane.Model{{ID: "mdl_one", Alias: "claude", ProviderID: "prv_one", UpstreamModel: "claude-sonnet", Status: controlplane.StatusActive, Revision: 1}},
 		secret:    "gwai_super_secret_once",
 	}
 	handler := newTestHandler(t, api, time.Now, false)
@@ -510,21 +582,45 @@ func TestCompleteCRUDLifecycleAndOneTimeReveal(t *testing.T) {
 		t.Fatalf("provider lifecycle lost immutable fields: %+v", api.lastProviderInput)
 	}
 
+	modelValues := url.Values{"_csrf": {csrf}, "alias": {"haiku"}, "provider_id": {"prv_one"}, "upstream_model": {"claude-haiku"}, "status": {"active"}}
+	createdModel := request(handler, http.MethodPost, "/models", cookie, modelValues)
+	if createdModel.Code != http.StatusSeeOther || api.lastModelInput.Alias != "haiku" || api.lastModelInput.ProviderID != "prv_one" {
+		t.Fatalf("model create failed: %d input=%+v", createdModel.Code, api.lastModelInput)
+	}
+	modelUpdate := request(handler, http.MethodPost, "/models/mdl_one", cookie, url.Values{
+		"_csrf": {csrf}, "_etag": {fakeETag}, "alias": {"claude"}, "provider_id": {"prv_one"},
+		"upstream_model": {"claude-sonnet-v2"}, "status": {"active"},
+	})
+	if modelUpdate.Code != http.StatusSeeOther || api.lastModelInput.Alias != "claude" || api.lastModelInput.UpstreamModel != "claude-sonnet-v2" || api.lastModelETag != fakeETag {
+		t.Fatalf("model update failed: %d input=%+v etag=%q", modelUpdate.Code, api.lastModelInput, api.lastModelETag)
+	}
+	modelStatus := request(handler, http.MethodPost, "/models/mdl_one/status", cookie, url.Values{"_csrf": {csrf}, "_etag": {fakeETag}, "status": {"disabled"}})
+	if modelStatus.Code != http.StatusSeeOther || api.lastModelInput.Alias != "claude" || api.lastModelInput.Status != controlplane.StatusDisabled {
+		t.Fatalf("model lifecycle lost replacement fields: %+v", api.lastModelInput)
+	}
+	modelList := request(handler, http.MethodGet, "/models?q=claude&status=disabled&provider_id=prv_one", cookie, nil)
+	if modelList.Code != http.StatusOK || !strings.Contains(modelList.Body.String(), `href="/models/mdl_one/edit"`) || !strings.Contains(modelList.Body.String(), "Anthropic") {
+		t.Fatalf("model list did not render filters and relationships: %d %s", modelList.Code, modelList.Body.String())
+	}
+
 	keyForm := request(handler, http.MethodGet, "/virtual-keys/new", cookie, nil)
-	keyValues := url.Values{"_csrf": {csrf}, "_operation": {operationFromBody(t, keyForm.Body.String())}, "name": {"CLI"}, "user_id": {"usr_one"}, "allowed_models": {"anthropic/claude\nanthropic/claude"}, "status": {"active"}}
+	if !strings.Contains(keyForm.Body.String(), `name="model_ids" value="mdl_one"`) || strings.Contains(keyForm.Body.String(), `name="allowed_models"`) {
+		t.Fatalf("key form did not render explicit model choices: %s", keyForm.Body.String())
+	}
+	keyValues := url.Values{"_csrf": {csrf}, "_operation": {operationFromBody(t, keyForm.Body.String())}, "name": {"CLI"}, "user_id": {"usr_one"}, "model_ids": {"mdl_one", "mdl_one"}, "status": {"active"}}
 	createdKey := request(handler, http.MethodPost, "/virtual-keys", cookie, keyValues)
 	if createdKey.Code != http.StatusCreated || !strings.Contains(createdKey.Body.String(), api.secret) || !strings.Contains(createdKey.Header().Get("Cache-Control"), "no-store") {
 		t.Fatalf("key creation did not return the one-time secret safely: %d body=%q", createdKey.Code, createdKey.Body.String())
 	}
-	if len(api.lastKeyInput.AllowedModels) != 1 {
-		t.Fatalf("models were not normalized: %+v", api.lastKeyInput.AllowedModels)
+	if len(api.lastKeyInput.ModelIDs) != 1 || api.lastKeyInput.ModelIDs[0] != "mdl_one" {
+		t.Fatalf("model IDs were not normalized: %+v", api.lastKeyInput.ModelIDs)
 	}
 	secondSubmit := request(handler, http.MethodPost, "/virtual-keys", cookie, keyValues)
 	if secondSubmit.Code != http.StatusConflict || strings.Contains(secondSubmit.Body.String(), api.secret) {
 		t.Fatalf("key creation form was reusable: %d", secondSubmit.Code)
 	}
-	keyUpdate := request(handler, http.MethodPost, "/virtual-keys/key_created", cookie, url.Values{"_csrf": {csrf}, "_etag": {fakeETag}, "name": {"CLI updated"}, "user_id": {"usr_one"}, "allowed_models": {"anthropic/claude-v2"}, "status": {"active"}})
-	if keyUpdate.Code != http.StatusSeeOther || api.lastKeyInput.Name != "CLI updated" || len(api.lastKeyInput.AllowedModels) != 1 {
+	keyUpdate := request(handler, http.MethodPost, "/virtual-keys/key_created", cookie, url.Values{"_csrf": {csrf}, "_etag": {fakeETag}, "name": {"CLI updated"}, "user_id": {"usr_one"}, "model_ids": {"mdl_created"}, "status": {"active"}})
+	if keyUpdate.Code != http.StatusSeeOther || api.lastKeyInput.Name != "CLI updated" || len(api.lastKeyInput.ModelIDs) != 1 || api.lastKeyInput.ModelIDs[0] != "mdl_created" {
 		t.Fatalf("key update failed: %d input=%+v", keyUpdate.Code, api.lastKeyInput)
 	}
 	if api.lastKeyETag != fakeETag {
@@ -542,14 +638,17 @@ func TestCompleteCRUDLifecycleAndOneTimeReveal(t *testing.T) {
 	if response := request(handler, http.MethodPost, "/virtual-keys/key_created/delete", cookie, url.Values{"_csrf": {csrf}, "_etag": {fakeETag}}); response.Code != http.StatusSeeOther {
 		t.Fatalf("key delete failed: %d", response.Code)
 	}
+	if response := request(handler, http.MethodPost, "/models/mdl_one/delete", cookie, url.Values{"_csrf": {csrf}, "_etag": {fakeETag}}); response.Code != http.StatusSeeOther {
+		t.Fatalf("model delete failed: %d", response.Code)
+	}
 	if response := request(handler, http.MethodPost, "/providers/prv_one/delete", cookie, url.Values{"_csrf": {csrf}, "_etag": {fakeETag}}); response.Code != http.StatusSeeOther {
 		t.Fatalf("provider delete failed: %d", response.Code)
 	}
 	if response := request(handler, http.MethodPost, "/users/usr_one/delete", cookie, url.Values{"_csrf": {csrf}, "_etag": {fakeETag}}); response.Code != http.StatusSeeOther {
 		t.Fatalf("user delete failed: %d", response.Code)
 	}
-	if api.lastDeleteUserETag != fakeETag || api.lastDeleteProviderETag != fakeETag || api.lastDeleteKeyETag != fakeETag {
-		t.Fatalf("conditional delete versions were lost: user=%q provider=%q key=%q", api.lastDeleteUserETag, api.lastDeleteProviderETag, api.lastDeleteKeyETag)
+	if api.lastDeleteUserETag != fakeETag || api.lastDeleteProviderETag != fakeETag || api.lastDeleteModelETag != fakeETag || api.lastDeleteKeyETag != fakeETag {
+		t.Fatalf("conditional delete versions were lost: user=%q provider=%q model=%q key=%q", api.lastDeleteUserETag, api.lastDeleteProviderETag, api.lastDeleteModelETag, api.lastDeleteKeyETag)
 	}
 }
 
@@ -557,14 +656,15 @@ func TestStatusAndDeleteConfirmationsAreVersionBound(t *testing.T) {
 	api := &fakeAPI{
 		users:     []controlplane.User{{ID: "usr_one", Name: "Ada", Email: "ada@example.com", Status: controlplane.StatusActive}},
 		providers: []controlplane.Provider{{ID: "prv_one", Slug: "anthropic", Name: "Anthropic", Kind: controlplane.ProviderKindAnthropic, AdapterAppID: "gwai-anthropic", Status: controlplane.StatusActive}},
-		keys:      []controlplane.PublicVirtualKey{{ID: "key_one", Name: "CLI", UserID: "usr_one", Status: controlplane.StatusActive}},
+		models:    []controlplane.Model{{ID: "mdl_one", Alias: "claude", ProviderID: "prv_one", UpstreamModel: "claude", Status: controlplane.StatusActive, Revision: 1}},
+		keys:      []controlplane.PublicVirtualKey{{ID: "key_one", Name: "CLI", UserID: "usr_one", ModelIDs: []string{"mdl_one"}, Status: controlplane.StatusActive}},
 	}
 	handler := newTestHandler(t, api, time.Now, false)
 	cookie, csrf := login(t, handler)
 
 	for _, path := range []string{
-		"/users/usr_one/status?to=disabled", "/providers/prv_one/status?to=disabled", "/virtual-keys/key_one/status?to=disabled",
-		"/users/usr_one/delete", "/providers/prv_one/delete", "/virtual-keys/key_one/delete",
+		"/users/usr_one/status?to=disabled", "/providers/prv_one/status?to=disabled", "/models/mdl_one/status?to=disabled", "/virtual-keys/key_one/status?to=disabled",
+		"/users/usr_one/delete", "/providers/prv_one/delete", "/models/mdl_one/delete", "/virtual-keys/key_one/delete",
 	} {
 		page := request(handler, http.MethodGet, path, cookie, nil)
 		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `name="_etag" value="&#34;fake-version&#34;"`) {
@@ -576,9 +676,11 @@ func TestStatusAndDeleteConfirmationsAreVersionBound(t *testing.T) {
 	for _, operation := range []struct{ path, status string }{
 		{"/users/usr_one/status", "disabled"},
 		{"/providers/prv_one/status", "disabled"},
+		{"/models/mdl_one/status", "disabled"},
 		{"/virtual-keys/key_one/status", "disabled"},
 		{"/users/usr_one/delete", ""},
 		{"/providers/prv_one/delete", ""},
+		{"/models/mdl_one/delete", ""},
 		{"/virtual-keys/key_one/delete", ""},
 	} {
 		values := url.Values{"_csrf": {csrf}}
@@ -595,16 +697,45 @@ func TestStatusAndDeleteConfirmationsAreVersionBound(t *testing.T) {
 	}
 }
 
+func TestVirtualKeyFormRequiresExplicitModelSelection(t *testing.T) {
+	api := &fakeAPI{
+		users:  []controlplane.User{{ID: "usr_one", Name: "Ada", Status: controlplane.StatusActive}},
+		models: []controlplane.Model{{ID: "mdl_one", Alias: "claude", ProviderID: "prv_one", UpstreamModel: "claude", Status: controlplane.StatusActive}},
+	}
+	handler := newTestHandler(t, api, time.Now, false)
+	cookie, csrf := login(t, handler)
+	form := request(handler, http.MethodGet, "/virtual-keys/new", cookie, nil)
+
+	api.mu.Lock()
+	before := len(api.calls)
+	api.mu.Unlock()
+	response := request(handler, http.MethodPost, "/virtual-keys", cookie, url.Values{
+		"_csrf": {csrf}, "_operation": {operationFromBody(t, form.Body.String())},
+		"name": {"missing model"}, "user_id": {"usr_one"}, "status": {"active"},
+	})
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "at least one model must be selected") {
+		t.Fatalf("model-less key form returned %d: %s", response.Code, response.Body.String())
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if slices.Contains(api.calls[before:], "CreateVirtualKey") {
+		t.Fatal("model-less virtual key reached the control plane")
+	}
+}
+
 func TestAmbiguousVirtualKeyCreationDoesNotOfferImmediateRetry(t *testing.T) {
-	api := &fakeAPI{errors: map[string]error{
-		"CreateVirtualKey": &APIError{Status: http.StatusBadGateway, Title: "Unavailable", Detail: "request failed", Ambiguous: true},
-	}}
+	api := &fakeAPI{
+		models: []controlplane.Model{{ID: "mdl_one", Alias: "claude", ProviderID: "prv_one", UpstreamModel: "claude", Status: controlplane.StatusActive}},
+		errors: map[string]error{
+			"CreateVirtualKey": &APIError{Status: http.StatusBadGateway, Title: "Unavailable", Detail: "request failed", Ambiguous: true},
+		},
+	}
 	handler := newTestHandler(t, api, time.Now, false)
 	cookie, csrf := login(t, handler)
 	form := request(handler, http.MethodGet, "/virtual-keys/new", cookie, nil)
 	response := request(handler, http.MethodPost, "/virtual-keys", cookie, url.Values{
 		"_csrf": {csrf}, "_operation": {operationFromBody(t, form.Body.String())},
-		"name": {"possibly created"}, "user_id": {"usr_one"}, "status": {"active"},
+		"name": {"possibly created"}, "user_id": {"usr_one"}, "model_ids": {"mdl_one"}, "status": {"active"},
 	})
 	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "outcome unknown") || !strings.Contains(response.Body.String(), "Inspect the virtual-key list") {
 		t.Fatalf("ambiguous key outcome was not handled safely: %d %s", response.Code, response.Body.String())
@@ -634,7 +765,7 @@ func TestErrorsAndUntrustedValuesAreSafelyRendered(t *testing.T) {
 
 func TestVirtualKeyExpiryRoundTripPreservesSubsecondPrecision(t *testing.T) {
 	expires := time.Date(2026, 7, 12, 12, 34, 59, 123456789, time.UTC)
-	form := virtualKeyFormFromModel(controlplane.PublicVirtualKey{ExpiresAt: &expires})
+	form := virtualKeyFormFromModel(controlplane.PublicVirtualKey{ModelIDs: []string{"mdl_one"}, ExpiresAt: &expires})
 	input, err := form.input()
 	if err != nil {
 		t.Fatal(err)

@@ -21,7 +21,7 @@ func TestDaprAPIUsesExplicitTargetsRoutesAndHTTPMethods(t *testing.T) {
 		contentLength                                                int64
 		transferEncoding                                             []string
 	}
-	requests := make(chan observed, 8)
+	requests := make(chan observed, 12)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		entry := observed{
 			method: r.Method, path: r.URL.EscapedPath(), authorization: r.Header.Get("Authorization"),
@@ -42,6 +42,13 @@ func TestDaprAPIUsesExplicitTargetsRoutesAndHTTPMethods(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"usr_new","name":"Ada","email":"ada@example.com","status":"active","revision":1,"created_at":"2026-07-12T00:00:00Z","updated_at":"2026-07-12T00:00:00Z"}`))
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/v1/providers/"):
 			_, _ = w.Write([]byte(`{"id":"prv_one","slug":"anthropic","name":"Primary","kind":"anthropic","base_url":"https://api.anthropic.com","api_version":"2023-06-01","adapter_app_id":"gwai-anthropic","secret_ref":{"store":"kubernetes","name":"anthropic"},"status":"disabled","created_at":"2026-07-12T00:00:00Z","updated_at":"2026-07-12T00:00:00Z"}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v1/models"):
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v1/models"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"mdl_one","alias":"claude","provider_id":"prv_one","upstream_model":"claude-sonnet","status":"active","revision":1,"created_at":"2026-07-12T00:00:00Z","updated_at":"2026-07-12T00:00:00Z"}`))
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/v1/models/"):
+			_, _ = w.Write([]byte(`{"id":"mdl_one","alias":"claude","provider_id":"prv_one","upstream_model":"claude-sonnet-v2","status":"active","revision":2,"created_at":"2026-07-12T00:00:00Z","updated_at":"2026-07-12T00:01:00Z"}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v1/virtual-keys"):
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"virtual_key":{"id":"key_one","name":"CLI","user_id":"usr_one","prefix":"gwai_prefix","status":"active","created_at":"2026-07-12T00:00:00Z","updated_at":"2026-07-12T00:00:00Z"},"key":"gwai_secret"}`))
@@ -77,19 +84,38 @@ func TestDaprAPIUsesExplicitTargetsRoutesAndHTTPMethods(t *testing.T) {
 	if updated.ETag != `"response-version"` {
 		t.Fatalf("updated provider ETag = %q", updated.ETag)
 	}
-	if _, err := api.CreateVirtualKey(ctx, controlplane.VirtualKeyInput{Name: "CLI", UserID: "usr_one", Status: controlplane.StatusActive}); err != nil {
+	if _, err := api.ListModels(ctx); err != nil {
+		t.Fatal(err)
+	}
+	modelInput := controlplane.ModelInput{Alias: "claude", ProviderID: "prv_one", UpstreamModel: "claude-sonnet", Status: controlplane.StatusActive}
+	if _, err := api.CreateModel(ctx, modelInput); err != nil {
+		t.Fatal(err)
+	}
+	modelInput.UpstreamModel = "claude-sonnet-v2"
+	updatedModel, err := api.UpdateModel(ctx, "mdl_one", modelInput, `"model-version"`)
+	if err != nil || updatedModel.ETag != `"response-version"` {
+		t.Fatalf("model update = %+v, %v", updatedModel, err)
+	}
+	if _, err := api.CreateVirtualKey(ctx, controlplane.VirtualKeyInput{Name: "CLI", UserID: "usr_one", ModelIDs: []string{"mdl_one"}, Status: controlplane.StatusActive}); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.DeleteModel(ctx, "mdl_one", `"model-delete-version"`); err != nil {
 		t.Fatal(err)
 	}
 	if err := api.DeleteVirtualKey(ctx, "key_one", `"key-version"`); err != nil {
 		t.Fatal(err)
 	}
 
-	wants := []struct{ method, path string }{
-		{http.MethodGet, "/v1.0/invoke/resource-plane/method/v1/users"},
-		{http.MethodPost, "/v1.0/invoke/resource-plane/method/v1/users"},
-		{http.MethodPut, "/v1.0/invoke/resource-plane/method/v1/providers/prv_one"},
-		{http.MethodPost, "/v1.0/invoke/key-plane/method/v1/virtual-keys"},
-		{http.MethodDelete, "/v1.0/invoke/key-plane/method/v1/virtual-keys/key_one"},
+	wants := []struct{ method, path, ifMatch string }{
+		{http.MethodGet, "/v1.0/invoke/resource-plane/method/v1/users", ""},
+		{http.MethodPost, "/v1.0/invoke/resource-plane/method/v1/users", ""},
+		{http.MethodPut, "/v1.0/invoke/resource-plane/method/v1/providers/prv_one", `"provider-version"`},
+		{http.MethodGet, "/v1.0/invoke/resource-plane/method/v1/models", ""},
+		{http.MethodPost, "/v1.0/invoke/resource-plane/method/v1/models", ""},
+		{http.MethodPut, "/v1.0/invoke/resource-plane/method/v1/models/mdl_one", `"model-version"`},
+		{http.MethodPost, "/v1.0/invoke/key-plane/method/v1/virtual-keys", ""},
+		{http.MethodDelete, "/v1.0/invoke/resource-plane/method/v1/models/mdl_one", `"model-delete-version"`},
+		{http.MethodDelete, "/v1.0/invoke/key-plane/method/v1/virtual-keys/key_one", `"key-version"`},
 	}
 	for index, want := range wants {
 		got := <-requests
@@ -102,11 +128,8 @@ func TestDaprAPIUsesExplicitTargetsRoutesAndHTTPMethods(t *testing.T) {
 		if (got.method == http.MethodPost || got.method == http.MethodPut) && got.contentType != "application/json" {
 			t.Fatalf("request %d content type = %q", index, got.contentType)
 		}
-		if got.method == http.MethodPut && got.ifMatch != `"provider-version"` {
+		if got.ifMatch != want.ifMatch {
 			t.Fatalf("request %d If-Match = %q", index, got.ifMatch)
-		}
-		if got.method == http.MethodDelete && got.ifMatch != `"key-version"` {
-			t.Fatalf("request %d delete If-Match = %q", index, got.ifMatch)
 		}
 		if got.method != http.MethodGet {
 			if got.contentLength != -1 || !slices.Contains(got.transferEncoding, "chunked") {

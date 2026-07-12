@@ -65,7 +65,7 @@ small { display: block; color: var(--muted); margin-top: .15rem; }
 .notice-info { background: var(--info-bg); border-color: #9ab3eb; }
 .request-id { font-size: .9rem; }
 
-.dashboard-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.3rem; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin-bottom: 1.3rem; }
 .summary-card { background: var(--surface); border: 1px solid var(--line); border-radius: .75rem; padding: 1.25rem; box-shadow: 0 10px 30px rgba(25, 40, 75, .05); }
 .summary-top { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
 .metric { font-size: 2.7rem; font-weight: 800; margin: 1rem 0 0; line-height: 1; }
@@ -100,6 +100,10 @@ legend { font-weight: 800; padding: 0 .35rem; }
 .form-actions { display: flex; gap: .5rem; align-items: center; margin-top: .4rem; }
 .suggestions { display: flex; gap: .5rem; flex-wrap: wrap; color: var(--muted); }
 .suggestions code { color: var(--ink); background: #edf1f7; border-radius: .3rem; padding: .15rem .35rem; }
+.choice-list { display: grid; gap: .55rem; max-height: 24rem; overflow-y: auto; }
+.choice { grid-template-columns: auto 1fr; align-items: start; gap: .65rem; padding: .65rem; border: 1px solid var(--line); border-radius: .45rem; }
+.choice input { width: auto; margin-top: .2rem; }
+.choice span { display: grid; gap: .15rem; }
 
 .login-page { min-height: 100vh; display: grid; place-items: center; padding: 1rem; background: radial-gradient(circle at top left, #e3eaff, var(--canvas) 45%); }
 .login-card { width: min(29rem, 100%); padding: 2rem; background: white; border: 1px solid var(--line); border-radius: .9rem; box-shadow: 0 24px 70px rgba(24, 40, 80, .14); }

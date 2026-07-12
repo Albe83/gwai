@@ -9,18 +9,19 @@ HTTP 404/405 response.
 | --- | --- | --- | --- |
 | `gwai-control-plane` | Users | `POST, GET /v1/users` | `GET, PUT, DELETE /v1/users/{id}` |
 | `gwai-control-plane` | Providers | `POST, GET /v1/providers` | `GET, PUT, DELETE /v1/providers/{id}` |
+| `gwai-control-plane` | Models | `POST, GET /v1/models` | `GET, PUT, DELETE /v1/models/{id}` |
 | `gwai-virtual-key-control-plane` | Virtual keys | `POST, GET /v1/virtual-keys` | `GET, PUT, DELETE /v1/virtual-keys/{id}` |
 
 The services have independent Kubernetes Services and do not mirror each
 other's routes. The default local port forwards in the getting-started guide use
-`8081` for users/providers and `8082` for virtual keys.
+`8081` for users/providers/models and `8082` for virtual keys.
 
 ## Administrative WebUI
 
 `gwai-admin-webui` is an HTML backend-for-frontend over these APIs, not a third
-owner of lifecycle data. Its route groups are `/users`, `/providers` and
-`/virtual-keys`; the dashboard is `/`. It sends user/provider commands to
-`gwai-control-plane` and key commands to
+owner of lifecycle data. Its route groups are `/users`, `/providers`, `/models`
+and `/virtual-keys`; the dashboard is `/`. It sends user/provider/model commands
+to `gwai-control-plane` and key commands to
 `gwai-virtual-key-control-plane` through Dapr service invocation. API clients
 can continue to use the JSON interfaces above directly.
 
@@ -61,8 +62,9 @@ read-only calls remain retryable. A lost mutation response produces an
 reload and inspect current state first.
 
 `PUT` is a complete replacement of editable fields. IDs and timestamps remain
-server-owned. Status is `active` or `disabled`. A user's monotonic `revision` is
-also server-owned and coordinates its authorization projection.
+server-owned. Status is `active` or `disabled`. User and Model `revision`
+values are monotonic, server-owned counters used to order their authorization
+projections.
 
 ## Providers and routing
 
@@ -103,15 +105,44 @@ Supported provider kinds and defaults:
 for one of the listed kinds; the adapter verifies its kind again on every IR
 request.
 
-There is no model catalog. Clients address any upstream model as
-`provider-slug/upstream-model`; only the first `/` is structural, so an upstream
-model ID may itself contain `/`.
+## Models
+
+A Model is the stable, client-facing route from an alias to one Provider and
+one provider-native model identifier:
+
+```json
+{
+  "id": "mdl_...",
+  "alias": "claude-sonnet",
+  "provider_id": "prv_...",
+  "upstream_model": "claude-sonnet-4-6",
+  "status": "active",
+  "revision": 1,
+  "created_at": "2026-07-12T12:00:00Z",
+  "updated_at": "2026-07-12T12:00:00Z"
+}
+```
+
+Aliases are globally unique, immutable identifiers accepted in every client
+protocol's `model` field or path. They contain 1–200 ASCII letters, digits,
+`.`, `_`, `:`, `/` or `-`, start with a letter or digit, and are matched
+exactly. `provider_id` and `upstream_model` are editable; moving a Model changes
+its selected Provider without introducing a gateway/provider protocol coupling.
+The upstream value contains 1–300 bytes and cannot contain CR, LF or NUL.
+
+Creation and activation require an active Provider. At inference time the
+Model, its synchronized model subject and its Provider must all be active.
+Disabling any one fails routing closed. A Provider cannot be deleted while it
+owns Models. A Model cannot be deleted while any virtual key references its ID;
+dependents must be deleted or updated first. No operation cascades or silently
+rewrites related resources.
 
 ## Virtual keys
 
-`allowed_models` contains exact qualified model names. Each referenced provider
-slug must exist when the key is created or updated. An empty list permits every
-model reachable through an active provider.
+`model_ids` is a required, non-empty array of Model IDs. Values are normalized,
+deduplicated and sorted. Every ID must have a synchronized, non-deleted Model
+subject, and an active key can reference only active Models. This is an explicit
+allowlist: there is no wildcard or implicit access to Models created later.
 
 Creation returns the plaintext once:
 
@@ -122,7 +153,7 @@ Creation returns the plaintext once:
     "name": "local",
     "user_id": "usr_...",
     "prefix": "gwai_...",
-    "allowed_models": ["anthropic/claude-sonnet"],
+    "model_ids": ["mdl_..."],
     "status": "active"
   },
   "key": "gwai_one_time_secret"
@@ -130,8 +161,8 @@ Creation returns the plaintext once:
 ```
 
 The `key` member is never returned again. A user cannot be deleted while it has
-virtual keys. Deleting a provider makes its qualified names unroutable but does
-not rewrite virtual-key allowlists.
+virtual keys. A Model cannot be deleted while its per-model key-reference index
+is non-empty, and a Provider cannot be deleted until all of its Models are gone.
 
 The virtual-key service validates the user against a local, revisioned subject
 projection. An active key requires an active, non-deleted subject. Missing or
@@ -157,16 +188,34 @@ non-reversible tombstone before the private user record is removed. Concurrent
 key creation or reassignment therefore conflicts with deletion instead of
 creating an orphan.
 
+Model lifecycle uses the same fail-closed protocol. The resource control plane
+stores canonical Models with Providers, then synchronizes a minimal
+`ModelSubject` into virtual-key state. Key create, update and delete operations
+update per-model reference indexes and touch each affected model-subject ETag in
+their transaction. A Model deletion first fences that subject and verifies its
+reference index is empty. A concurrent key mutation and fence therefore cannot
+both commit.
+
+Model creation and activation publish canonical state before the active
+projection; disablement publishes the disabled projection first. A missing,
+stale, disabled or deleted model subject denies authorization. An ambiguous
+cross-service result can consequently leave a resource more restrictive than
+its canonical record, never more permissive. Repeating the complete Model PUT
+advances its revision and repairs a failed synchronization; retrying deletion
+completes an idempotent fence followed by canonical removal.
+
 ## Runtime boundary
 
 Neither control plane exposes an authorization or route-resolution API to the
-data plane. Gateways read key/subject state and provider state directly;
-adapters read only provider state.
+data plane. Gateways read key/user/model-subject state plus Model/Provider state
+directly; adapters construct the narrower Provider-only runtime view.
 
-The resource service invokes two non-public virtual-key operations through Dapr:
+The resource service invokes four non-public virtual-key operations through Dapr:
 
 - `POST /internal/v1/subjects/sync` for idempotent, ordered status revisions;
-- `POST /internal/v1/subjects/fence` for deletion fencing.
+- `POST /internal/v1/subjects/fence` for user deletion fencing;
+- `POST /internal/v1/model-subjects/sync` for Model status/revision projection;
+- `POST /internal/v1/model-subjects/fence` for Model deletion fencing.
 
 They require the Dapr application token and an ACL allowing only the
 `gwai-control-plane` identity. They are not admin APIs and must not be exposed
@@ -174,7 +223,9 @@ through an ingress.
 
 ## State compatibility
 
-This 0.x layout replaces the former single `gwai-state` registry with
-`gwai-control-state`, `gwai-provider-state` and `gwai-virtual-key-state`. There
-is no automatic migration. Upgrade using a fresh installation or explicitly
-reset and reprovision the old pre-release users, providers and virtual keys.
+The three components remain `gwai-control-state`, `gwai-provider-state` and
+`gwai-virtual-key-state`, but this 0.x schema is breaking. Earlier virtual keys
+contain qualified strings instead of required Model IDs and have no per-model
+reference indexes or model-subject projections. There is no permissive runtime
+fallback and no automatic migration. Upgrade using a fresh installation or
+explicitly reset and reprovision users, providers, Models and virtual keys.

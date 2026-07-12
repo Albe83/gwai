@@ -138,6 +138,16 @@ func NewHandler(api API, config Config, logger *slog.Logger) (http.Handler, erro
 	mux.HandleFunc("GET /providers/{id}/delete", s.auth(s.confirmDeleteProvider))
 	mux.HandleFunc("POST /providers/{id}/delete", s.auth(s.deleteProvider))
 
+	mux.HandleFunc("GET /models", s.auth(s.listModels))
+	mux.HandleFunc("GET /models/new", s.auth(s.newModel))
+	mux.HandleFunc("POST /models", s.auth(s.createModel))
+	mux.HandleFunc("GET /models/{id}/edit", s.auth(s.editModel))
+	mux.HandleFunc("POST /models/{id}", s.auth(s.updateModel))
+	mux.HandleFunc("GET /models/{id}/status", s.auth(s.confirmModelStatus))
+	mux.HandleFunc("POST /models/{id}/status", s.auth(s.changeModelStatus))
+	mux.HandleFunc("GET /models/{id}/delete", s.auth(s.confirmDeleteModel))
+	mux.HandleFunc("POST /models/{id}/delete", s.auth(s.deleteModel))
+
 	mux.HandleFunc("GET /virtual-keys", s.auth(s.listVirtualKeys))
 	mux.HandleFunc("GET /virtual-keys/new", s.auth(s.newVirtualKey))
 	mux.HandleFunc("POST /virtual-keys", s.auth(s.createVirtualKey))
@@ -414,9 +424,9 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request, session sessionS
 
 func (s *server) dashboard(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {
 	data := s.basePage(session, "Dashboard", "dashboard")
-	var usersErr, providersErr, keysErr error
+	var usersErr, providersErr, modelsErr, keysErr error
 	var wait sync.WaitGroup
-	wait.Add(3)
+	wait.Add(4)
 	go func() {
 		defer wait.Done()
 		data.Users, usersErr = s.api.ListUsers(r.Context())
@@ -427,13 +437,17 @@ func (s *server) dashboard(w http.ResponseWriter, r *http.Request, session sessi
 	}()
 	go func() {
 		defer wait.Done()
+		data.Models, modelsErr = s.api.ListModels(r.Context())
+	}()
+	go func() {
+		defer wait.Done()
 		data.VirtualKeys, keysErr = s.api.ListVirtualKeys(r.Context())
 	}()
 	wait.Wait()
-	data.ResourceSection.Available = usersErr == nil && providersErr == nil
-	data.ResourceSection.Count = len(data.Users) + len(data.Providers)
-	if usersErr != nil || providersErr != nil {
-		data.ResourceSection.Error = "Users or providers are temporarily unavailable."
+	data.ResourceSection.Available = usersErr == nil && providersErr == nil && modelsErr == nil
+	data.ResourceSection.Count = len(data.Users) + len(data.Providers) + len(data.Models)
+	if usersErr != nil || providersErr != nil || modelsErr != nil {
+		data.ResourceSection.Error = "Users, providers or models are temporarily unavailable."
 	}
 	data.KeySection.Available = keysErr == nil
 	data.KeySection.Count = len(data.VirtualKeys)

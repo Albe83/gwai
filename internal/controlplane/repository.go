@@ -52,8 +52,16 @@ func virtualKeysByUserIndexKey(userID string) string {
 	return indexKey("virtual-keys-by-user/" + userID)
 }
 
+func virtualKeysByModelIndexKey(modelID string) string {
+	return indexKey("virtual-keys-by-model/" + modelID)
+}
+
 func keySubjectKey(userID string) string {
 	return entityKey("key-subjects", userID)
+}
+
+func modelSubjectKey(modelID string) string {
+	return entityKey("model-subjects", modelID)
 }
 
 func encode(value any) (json.RawMessage, error) {
@@ -586,6 +594,9 @@ func (r *VirtualKeyRepository) FenceSubject(ctx context.Context, subject KeySubj
 }
 
 func (r *VirtualKeyRepository) CreateVirtualKey(ctx context.Context, key VirtualKey) error {
+	if len(key.ModelIDs) == 0 {
+		return fmt.Errorf("%w: virtual key requires at least one model", ErrConflict)
+	}
 	r.repository.mu.Lock()
 	defer r.repository.mu.Unlock()
 
@@ -609,6 +620,10 @@ func (r *VirtualKeyRepository) CreateVirtualKey(ctx context.Context, key Virtual
 		return err
 	}
 	if err := ensureSubjectCanOwnKey(subject, key); err != nil {
+		return err
+	}
+	modelIDs, modelMutations, err := r.prepareModelIndexMutations(ctx, nil, key.ModelIDs, key)
+	if err != nil {
 		return err
 	}
 	globalIndex, globalETag, err := readIndex(ctx, r.repository.store, indexKey("virtual-keys"))
@@ -642,18 +657,27 @@ func (r *VirtualKeyRepository) CreateVirtualKey(ctx context.Context, key Virtual
 	if err != nil {
 		return err
 	}
-	return transact(ctx, &r.repository, []state.Operation{
+	operations := []state.Operation{
 		{Type: state.Upsert, Key: entityKey("virtual-keys", key.ID), Value: entityValue},
 		{Type: state.Upsert, Key: indexKey("virtual-keys"), Value: globalIndexValue, ETag: globalETag},
 		{Type: state.Upsert, Key: hashLookupKey, Value: lookupValue},
 		{Type: state.Upsert, Key: virtualKeysByUserIndexKey(key.UserID), Value: userIndexValue, ETag: userETag},
 		touch,
-	})
+	}
+	modelOperations, err := modelIndexOperations(modelIDs, modelMutations, key.ID, nil, key.ModelIDs)
+	if err != nil {
+		return err
+	}
+	operations = append(operations, modelOperations...)
+	return transact(ctx, &r.repository, operations)
 }
 
 func (r *VirtualKeyRepository) ReplaceVirtualKey(ctx context.Context, oldKey, key VirtualKey) error {
 	if oldKey.ID != key.ID {
 		return fmt.Errorf("%w: virtual key ID is immutable", ErrConflict)
+	}
+	if len(key.ModelIDs) == 0 {
+		return fmt.Errorf("%w: virtual key requires at least one model", ErrConflict)
 	}
 	r.repository.mu.Lock()
 	defer r.repository.mu.Unlock()
@@ -700,6 +724,10 @@ func (r *VirtualKeyRepository) ReplaceVirtualKey(ctx context.Context, oldKey, ke
 		}
 	}
 	if err := ensureSubjectCanOwnKey(newSubject, key); err != nil {
+		return err
+	}
+	modelIDs, modelMutations, err := r.prepareModelIndexMutations(ctx, current.ModelIDs, key.ModelIDs, key)
+	if err != nil {
 		return err
 	}
 
@@ -763,6 +791,11 @@ func (r *VirtualKeyRepository) ReplaceVirtualKey(ctx context.Context, oldKey, ke
 			newTouch,
 		)
 	}
+	modelOperations, err := modelIndexOperations(modelIDs, modelMutations, key.ID, current.ModelIDs, key.ModelIDs)
+	if err != nil {
+		return err
+	}
+	operations = append(operations, modelOperations...)
 	return transact(ctx, &r.repository, operations)
 }
 
@@ -791,6 +824,10 @@ func (r *VirtualKeyRepository) DeleteVirtualKey(ctx context.Context, key Virtual
 	if !subject.exists {
 		return fmt.Errorf("%w: current key subject does not exist", ErrConflict)
 	}
+	modelIDs, modelMutations, err := r.prepareModelIndexMutations(ctx, current.ModelIDs, nil, current)
+	if err != nil {
+		return err
+	}
 	globalIndex, globalETag, err := readIndex(ctx, r.repository.store, indexKey("virtual-keys"))
 	if err != nil {
 		return err
@@ -813,11 +850,17 @@ func (r *VirtualKeyRepository) DeleteVirtualKey(ctx context.Context, key Virtual
 	if err != nil {
 		return err
 	}
-	return transact(ctx, &r.repository, []state.Operation{
+	operations := []state.Operation{
 		{Type: state.Delete, Key: entityKey("virtual-keys", current.ID), ETag: entityEntry.ETag},
 		{Type: state.Upsert, Key: indexKey("virtual-keys"), Value: globalIndexValue, ETag: globalETag},
 		{Type: state.Delete, Key: lookupKey("key-hash", current.KeyHash)},
 		{Type: state.Upsert, Key: virtualKeysByUserIndexKey(current.UserID), Value: userIndexValue, ETag: userETag},
 		touch,
-	})
+	}
+	modelOperations, err := modelIndexOperations(modelIDs, modelMutations, current.ID, current.ModelIDs, nil)
+	if err != nil {
+		return err
+	}
+	operations = append(operations, modelOperations...)
+	return transact(ctx, &r.repository, operations)
 }

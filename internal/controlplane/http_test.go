@@ -17,10 +17,12 @@ import (
 func newControlPlaneHandlers() (http.Handler, http.Handler) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	users := NewUserRepository(state.NewMemoryStore())
-	providers := NewProviderRepository(state.NewMemoryStore())
+	providerStore := state.NewMemoryStore()
+	providers := NewProviderRepository(providerStore)
+	models := NewModelRepository(providerStore)
 	keyRepo := NewVirtualKeyRepository(state.NewMemoryStore())
-	keys := NewVirtualKeyService(keyRepo, providers)
-	resources := NewResourceService(users, providers, keys)
+	keys := NewVirtualKeyService(keyRepo)
+	resources := NewResourceService(users, providers, models, keys, keys)
 	return NewResourceHTTPHandler(resources, "admin-token", 1<<20, logger),
 		NewVirtualKeyHTTPHandler(keys, "admin-token", "app-token", 1<<20, logger)
 }
@@ -108,6 +110,29 @@ func TestVirtualKeyInternalSubjectEndpointRequiresAppToken(t *testing.T) {
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("internal endpoint with app token returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	model := ModelSubject{
+		ModelID: "mdl_test", Alias: "assistant", Status: StatusActive, Revision: 1, UpdatedAt: time.Now().UTC(),
+	}
+	payload, err = json.Marshal(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/internal/v1/model-subjects/sync", bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("internal model endpoint without app token returned %d", recorder.Code)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/internal/v1/model-subjects/sync", bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("dapr-api-token", "app-token")
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("internal model endpoint with app token returned %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -222,8 +247,41 @@ func TestPublicResourceETagsAndIfMatchAcrossAllDomains(t *testing.T) {
 		t.Fatalf("malformed provider If-Match returned %d: %s", response.Code, response.Body.String())
 	}
 
+	modelInput := ModelInput{
+		Alias: "assistant", ProviderID: provider.ID, UpstreamModel: "claude-sonnet", Status: StatusActive,
+	}
+	createdModelResponse := controlRequest(resources, http.MethodPost, "/v1/models", "admin-token", modelInput)
+	if createdModelResponse.Code != http.StatusCreated {
+		t.Fatalf("create model returned %d: %s", createdModelResponse.Code, createdModelResponse.Body.String())
+	}
+	modelCreateTag := requireStrongETag(t, createdModelResponse)
+	var model Model
+	if err := json.Unmarshal(createdModelResponse.Body.Bytes(), &model); err != nil {
+		t.Fatal(err)
+	}
+	modelGetResponse := controlRequest(resources, http.MethodGet, "/v1/models/"+model.ID, "admin-token", nil)
+	if modelGetResponse.Code != http.StatusOK || requireStrongETag(t, modelGetResponse) != modelCreateTag {
+		t.Fatal("model POST and GET did not expose the same entity version")
+	}
+	modelUpdate := modelInput
+	modelUpdate.UpstreamModel = "claude-sonnet-v2"
+	modelPutResponse := controlRequestIfMatch(resources, http.MethodPut, "/v1/models/"+model.ID, "admin-token", modelCreateTag, modelUpdate)
+	if modelPutResponse.Code != http.StatusOK {
+		t.Fatalf("conditional model update returned %d: %s", modelPutResponse.Code, modelPutResponse.Body.String())
+	}
+	modelUpdatedTag := requireStrongETag(t, modelPutResponse)
+	if modelUpdatedTag == modelCreateTag {
+		t.Fatal("changed model retained its old ETag")
+	}
+	if response := controlRequestIfMatch(resources, http.MethodPut, "/v1/models/"+model.ID, "admin-token", modelCreateTag, modelUpdate); response.Code != http.StatusConflict {
+		t.Fatalf("stale model If-Match returned %d: %s", response.Code, response.Body.String())
+	}
+	if response := controlRequestIfMatch(resources, http.MethodPut, "/v1/models/"+model.ID, "admin-token", "not-an-etag", modelUpdate); response.Code != http.StatusBadRequest {
+		t.Fatalf("malformed model If-Match returned %d: %s", response.Code, response.Body.String())
+	}
+
 	createdKeyResponse := controlRequest(keys, http.MethodPost, "/v1/virtual-keys", "admin-token", VirtualKeyInput{
-		Name: "CLI", UserID: user.ID, AllowedModels: []string{"anthropic/claude"}, Status: StatusActive,
+		Name: "CLI", UserID: user.ID, ModelIDs: []string{model.ID}, Status: StatusActive,
 	})
 	if createdKeyResponse.Code != http.StatusCreated {
 		t.Fatalf("create key returned %d: %s", createdKeyResponse.Code, createdKeyResponse.Body.String())
@@ -238,7 +296,7 @@ func TestPublicResourceETagsAndIfMatchAcrossAllDomains(t *testing.T) {
 		t.Fatal("virtual-key POST ETag must validate the nested public resource returned by GET")
 	}
 	keyUpdate := VirtualKeyInput{
-		Name: "CLI updated", UserID: user.ID, AllowedModels: []string{"anthropic/claude"}, Status: StatusActive,
+		Name: "CLI updated", UserID: user.ID, ModelIDs: []string{model.ID}, Status: StatusActive,
 	}
 	keyPutResponse := controlRequestIfMatch(keys, http.MethodPut, "/v1/virtual-keys/"+createdKey.VirtualKey.ID, "admin-token", keyCreateTag, keyUpdate)
 	if keyPutResponse.Code != http.StatusOK {
@@ -266,6 +324,15 @@ func TestPublicResourceETagsAndIfMatchAcrossAllDomains(t *testing.T) {
 	}
 	if response := controlRequestIfMatch(keys, http.MethodDelete, "/v1/virtual-keys/"+createdKey.VirtualKey.ID, "admin-token", keyUpdatedTag, nil); response.Code != http.StatusNoContent {
 		t.Fatalf("conditional key delete returned %d: %s", response.Code, response.Body.String())
+	}
+	if response := controlRequestIfMatch(resources, http.MethodDelete, "/v1/models/"+model.ID, "admin-token", modelCreateTag, nil); response.Code != http.StatusConflict {
+		t.Fatalf("stale model delete returned %d: %s", response.Code, response.Body.String())
+	}
+	if response := controlRequestIfMatch(resources, http.MethodDelete, "/v1/models/"+model.ID, "admin-token", "not-an-etag", nil); response.Code != http.StatusBadRequest {
+		t.Fatalf("malformed model delete returned %d: %s", response.Code, response.Body.String())
+	}
+	if response := controlRequestIfMatch(resources, http.MethodDelete, "/v1/models/"+model.ID, "admin-token", modelUpdatedTag, nil); response.Code != http.StatusNoContent {
+		t.Fatalf("conditional model delete returned %d: %s", response.Code, response.Body.String())
 	}
 
 	if response := controlRequestIfMatch(resources, http.MethodDelete, "/v1/providers/"+provider.ID, "admin-token", providerCreateTag, nil); response.Code != http.StatusConflict {

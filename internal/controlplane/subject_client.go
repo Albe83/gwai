@@ -14,7 +14,8 @@ type JSONInvoker interface {
 }
 
 // RemoteSubjectRegistry is the internal Dapr client used by the resource
-// control plane. The virtual-key service remains the sole state writer.
+// control plane for user and model authorization projections. The virtual-key
+// service remains the sole writer for that projection state.
 type RemoteSubjectRegistry struct {
 	invoker JSONInvoker
 	appID   string
@@ -25,23 +26,31 @@ func NewRemoteSubjectRegistry(invoker JSONInvoker, appID string) *RemoteSubjectR
 }
 
 func (r *RemoteSubjectRegistry) SyncSubject(ctx context.Context, subject KeySubject) error {
-	return r.invoke(ctx, "/internal/v1/subjects/sync", subject)
+	return r.invoke(ctx, "/internal/v1/subjects/sync", subject, "authorization subject")
 }
 
 func (r *RemoteSubjectRegistry) FenceSubject(ctx context.Context, subject KeySubject) error {
-	return r.invoke(ctx, "/internal/v1/subjects/fence", subject)
+	return r.invoke(ctx, "/internal/v1/subjects/fence", subject, "authorization subject")
 }
 
-func (r *RemoteSubjectRegistry) invoke(ctx context.Context, method string, subject KeySubject) error {
+func (r *RemoteSubjectRegistry) SyncModel(ctx context.Context, subject ModelSubject) error {
+	return r.invoke(ctx, "/internal/v1/model-subjects/sync", subject, "model subject")
+}
+
+func (r *RemoteSubjectRegistry) FenceModel(ctx context.Context, subject ModelSubject) error {
+	return r.invoke(ctx, "/internal/v1/model-subjects/fence", subject, "model subject")
+}
+
+func (r *RemoteSubjectRegistry) invoke(ctx context.Context, method string, payload any, resource string) error {
 	if r == nil || r.invoker == nil || r.appID == "" {
-		return errors.New("virtual-key control-plane invocation is not configured")
+		return fmt.Errorf("%w: virtual-key control-plane invocation is not configured", ErrUnavailable)
 	}
-	if err := r.invoker.InvokeJSON(ctx, r.appID, method, subject, nil); err != nil {
+	if err := r.invoker.InvokeJSON(ctx, r.appID, method, payload, nil); err != nil {
 		var httpErr *daprhttp.HTTPError
 		if errors.As(err, &httpErr) {
 			switch httpErr.StatusCode {
 			case http.StatusConflict:
-				return fmt.Errorf("%w: authorization subject", ErrConflict)
+				return fmt.Errorf("%w: %s", ErrConflict, resource)
 			}
 		}
 		return fmt.Errorf("%w: invoke virtual-key control-plane: %w", ErrUnavailable, err)

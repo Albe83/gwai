@@ -31,30 +31,40 @@ type dashboardSection struct {
 }
 
 type pageData struct {
-	Title         string
-	Section       string
-	Authenticated bool
-	CSRFToken     string
-	Flashes       []flashMessage
-	Error         *viewError
-	StatusCode    int
-	Warnings      []string
-	Query         string
-	StatusFilter  string
-	UserFilter    string
+	Title          string
+	Section        string
+	Authenticated  bool
+	CSRFToken      string
+	Flashes        []flashMessage
+	Error          *viewError
+	StatusCode     int
+	Warnings       []string
+	Query          string
+	StatusFilter   string
+	UserFilter     string
+	ProviderFilter string
+	ModelFilter    string
 
 	ResourceSection dashboardSection
 	KeySection      dashboardSection
 
-	Users              []controlplane.User
-	Providers          []controlplane.Provider
-	VirtualKeys        []controlplane.PublicVirtualKey
-	UserKeyCounts      map[string]int
-	UserNames          map[string]string
-	RelationsAvailable bool
+	Users                 []controlplane.User
+	Providers             []controlplane.Provider
+	Models                []controlplane.Model
+	VirtualKeys           []controlplane.PublicVirtualKey
+	UserKeyCounts         map[string]int
+	UserNames             map[string]string
+	ProviderModelCounts   map[string]int
+	ProviderNames         map[string]string
+	ModelKeyCounts        map[string]int
+	ModelNames            map[string]string
+	RelationsAvailable    bool
+	UserChoicesAvailable  bool
+	ModelChoicesAvailable bool
 
 	UserForm       *userForm
 	ProviderForm   *providerForm
+	ModelForm      *modelForm
 	VirtualKeyForm *virtualKeyForm
 	Editing        bool
 	ResourceID     string
@@ -111,6 +121,9 @@ func newRenderer() (*renderer, error) {
 				return "status status-active"
 			}
 			return "status status-disabled"
+		},
+		"hasString": func(values []string, value string) bool {
+			return slices.Contains(values, value)
 		},
 	}
 	parsed, err := template.New("admin").Funcs(functions).ParseFS(webFiles, "templates/*.html")
@@ -202,12 +215,33 @@ func (f providerForm) input() controlplane.ProviderInput {
 	}
 }
 
-type virtualKeyForm struct {
-	Name          string
-	UserID        string
-	AllowedModels string
+type modelForm struct {
+	Alias         string
+	ProviderID    string
+	UpstreamModel string
 	Status        string
-	ExpiresAt     string
+}
+
+func modelFormFromModel(model controlplane.Model) modelForm {
+	return modelForm{
+		Alias: model.Alias, ProviderID: model.ProviderID,
+		UpstreamModel: model.UpstreamModel, Status: string(model.Status),
+	}
+}
+
+func (f modelForm) input() controlplane.ModelInput {
+	return controlplane.ModelInput{
+		Alias: f.Alias, ProviderID: f.ProviderID,
+		UpstreamModel: f.UpstreamModel, Status: controlplane.Status(f.Status),
+	}
+}
+
+type virtualKeyForm struct {
+	Name      string
+	UserID    string
+	ModelIDs  []string
+	Status    string
+	ExpiresAt string
 }
 
 func virtualKeyFormFromModel(key controlplane.PublicVirtualKey) virtualKeyForm {
@@ -217,19 +251,22 @@ func virtualKeyFormFromModel(key controlplane.PublicVirtualKey) virtualKeyForm {
 	}
 	return virtualKeyForm{
 		Name: key.Name, UserID: key.UserID,
-		AllowedModels: strings.Join(key.AllowedModels, "\n"),
-		Status:        string(key.Status), ExpiresAt: expires,
+		ModelIDs: slices.Clone(key.ModelIDs), Status: string(key.Status), ExpiresAt: expires,
 	}
 }
 
 func (f virtualKeyForm) input() (controlplane.VirtualKeyInput, error) {
-	models := make([]string, 0)
-	for _, line := range strings.Split(strings.ReplaceAll(f.AllowedModels, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !slices.Contains(models, line) {
-			models = append(models, line)
+	modelIDs := make([]string, 0, len(f.ModelIDs))
+	for _, modelID := range f.ModelIDs {
+		modelID = strings.TrimSpace(modelID)
+		if modelID != "" && !slices.Contains(modelIDs, modelID) {
+			modelIDs = append(modelIDs, modelID)
 		}
 	}
+	if len(modelIDs) == 0 {
+		return controlplane.VirtualKeyInput{}, errors.New("at least one model must be selected")
+	}
+	slices.Sort(modelIDs)
 	var expires *time.Time
 	if strings.TrimSpace(f.ExpiresAt) != "" {
 		parsed, err := time.ParseInLocation("2006-01-02T15:04:05", strings.TrimSpace(f.ExpiresAt), time.UTC)
@@ -239,7 +276,7 @@ func (f virtualKeyForm) input() (controlplane.VirtualKeyInput, error) {
 		expires = &parsed
 	}
 	return controlplane.VirtualKeyInput{
-		Name: f.Name, UserID: f.UserID, AllowedModels: models,
+		Name: f.Name, UserID: f.UserID, ModelIDs: modelIDs,
 		Status: controlplane.Status(f.Status), ExpiresAt: expires,
 	}, nil
 }

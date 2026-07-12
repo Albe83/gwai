@@ -28,13 +28,15 @@ func run() error {
 	users := controlplane.NewUserRepository(daprhttp.NewStateStore(
 		daprClient, platform.Env("GWAI_CONTROL_STATE_STORE", "gwai-control-state"),
 	))
-	providers := controlplane.NewProviderRepository(daprhttp.NewStateStore(
+	providerStore := daprhttp.NewStateStore(
 		daprClient, platform.Env("GWAI_PROVIDER_STATE_STORE", "gwai-provider-state"),
-	))
+	)
+	providers := controlplane.NewProviderRepository(providerStore)
+	models := controlplane.NewModelRepository(providerStore)
 	subjects := controlplane.NewRemoteSubjectRegistry(
 		daprClient, platform.Env("GWAI_VIRTUAL_KEY_CONTROL_APP_ID", "gwai-virtual-key-control-plane"),
 	)
-	service := controlplane.NewResourceService(users, providers, subjects)
+	service := controlplane.NewResourceService(users, providers, models, subjects, subjects)
 	handler := controlplane.NewResourceHTTPHandler(service, adminToken, maxBody, logger)
 
 	server := &http.Server{

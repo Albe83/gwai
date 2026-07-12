@@ -100,7 +100,7 @@ kubectl -n gwai rollout status deployment \
 ```
 
 For the browser workflow, open `http://127.0.0.1:28087`, enter that token in
-the login form, and then manage users, providers and virtual keys from the
+the login form, and then manage users, providers, models and virtual keys from the
 dashboard. The token is checked by the Go backend and is not stored in browser
 storage or forwarded to client-side JavaScript. The resulting session cookie is
 HTTP-only and mutations require CSRF protection. A newly created virtual key is
@@ -155,7 +155,7 @@ opening the hostname:
 kubectl -n gwai describe httproute gwai-admin-webui
 ```
 
-## 4. Provision a provider and client key
+## 4. Provision a Provider, Model and client key
 
 ```bash
 USER_ID=$(curl -fsS http://127.0.0.1:8081/v1/users \
@@ -163,7 +163,7 @@ USER_ID=$(curl -fsS http://127.0.0.1:8081/v1/users \
   -H 'Content-Type: application/json' \
   -d '{"name":"Local user","email":"local@example.com"}' | jq -r .id)
 
-curl -fsS http://127.0.0.1:8081/v1/providers \
+PROVIDER_ID=$(curl -fsS http://127.0.0.1:8081/v1/providers \
   -H "Authorization: Bearer $GWAI_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -172,18 +172,29 @@ curl -fsS http://127.0.0.1:8081/v1/providers \
     "kind":"anthropic",
     "adapter_app_id":"gwai-anthropic",
     "secret_ref":{"store":"kubernetes","name":"gwai-anthropic","key":"api-key"}
-  }' | jq
+  }' | jq -r .id)
+
+MODEL_ID=$(curl -fsS http://127.0.0.1:8081/v1/models \
+  -H "Authorization: Bearer $GWAI_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"alias\":\"claude-sonnet\",
+    \"provider_id\":\"$PROVIDER_ID\",
+    \"upstream_model\":\"claude-sonnet-4-6\"
+  }" | jq -r .id)
 
 GWAI_API_KEY=$(curl -fsS http://127.0.0.1:8082/v1/virtual-keys \
   -H "Authorization: Bearer $GWAI_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{\"name\":\"local\",\"user_id\":\"$USER_ID\",\"allowed_models\":[\"anthropic/claude-sonnet-4-6\"]}" \
+  -d "{\"name\":\"local\",\"user_id\":\"$USER_ID\",\"model_ids\":[\"$MODEL_ID\"]}" \
   | jq -r .key)
 ```
 
-The virtual key is returned once. The resource control plane synchronizes a
-minimal revisioned user subject to the virtual-key service; gateway
-authorization fails closed if that projection is absent, disabled or deleted.
+The virtual key is returned once. `model_ids` is required and cannot be empty.
+Clients use the Model's stable `alias`; its `upstream_model` remains an internal
+routing detail. The resource control plane synchronizes minimal revisioned user
+and model subjects to the virtual-key service; gateway authorization fails
+closed if either projection is absent, disabled, stale or deleted.
 To configure another provider, use the same `providerSlug`, `kind` and `appID`
 as its Helm entry. Omitted endpoints and API versions receive the defaults in
 [the control-plane API](control-plane-api.md).
@@ -198,7 +209,7 @@ curl -fsS http://127.0.0.1:8080/v1/chat/completions \
   -H "Authorization: Bearer $GWAI_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{
-    "model":"anthropic/claude-sonnet-4-6",
+    "model":"claude-sonnet",
     "messages":[{"role":"user","content":"Reply with one short sentence."}],
     "max_completion_tokens":128
   }' | jq
@@ -211,15 +222,18 @@ Anthropic and Gemini are listed in
 ## 6. Deterministic smoke test
 
 `make e2e-k3s` verifies the WebUI login/session/CSRF boundary, filters, complete
-lifecycle forms, confirmation pages, single-use key creation and degraded
-views. It provisions temporary resources and a fake Anthropic provider, sends
+user/provider/model/key lifecycle forms, confirmation pages, dependency
+conflicts, single-use key creation and degraded views. It provisions temporary
+resources and a fake Anthropic provider, sends
 all four public client protocols through that one adapter, verifies user
 revocation, exercises both admin services independently, scales both control
 planes to zero, restarts the adapter, and cleans up. It never requires a real
 provider key and does not print either the admin token or a one-time virtual
 key.
 
-This pre-release schema does not migrate the earlier single-store registry or
-IR payloads. Use a fresh 0.x installation, or deliberately reset the persistent
-state and recreate users, providers and virtual keys after upgrading. Merely
-reusing a volume containing `gwai-state` is not a migration.
+This pre-release schema does not migrate either the earlier single-store
+registry or virtual keys whose allowlist contains qualified model strings.
+Use a fresh 0.x installation, or deliberately reset the persistent state and
+recreate users, providers, models and virtual keys after upgrading. Merely
+reusing an old Valkey volume is not a migration; legacy keys do not contain the
+Model IDs, reference indexes and projections required for safe authorization.

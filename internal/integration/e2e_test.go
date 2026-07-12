@@ -127,18 +127,20 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 	defer providerServer.Close()
 
 	userRepository := controlplane.NewUserRepository(state.NewMemoryStore())
-	providerRepository := controlplane.NewProviderRepository(state.NewMemoryStore())
+	providerStore := state.NewMemoryStore()
+	providerRepository := controlplane.NewProviderRepository(providerStore)
+	modelRepository := controlplane.NewModelRepository(providerStore)
 	keyRepository := controlplane.NewVirtualKeyRepository(state.NewMemoryStore())
 	invoker := newLocalInvoker()
-	keyService := controlplane.NewVirtualKeyService(keyRepository, providerRepository)
+	keyService := controlplane.NewVirtualKeyService(keyRepository)
 	keyHandler := controlplane.NewVirtualKeyHTTPHandler(keyService, "admin-test-token", "internal-test-token", 1<<20, logger)
 	invoker.register("gwai-virtual-key-control-plane", keyHandler)
+	registry := controlplane.NewRemoteSubjectRegistry(invoker, "gwai-virtual-key-control-plane")
 	controlService := controlplane.NewResourceService(
-		userRepository, providerRepository,
-		controlplane.NewRemoteSubjectRegistry(invoker, "gwai-virtual-key-control-plane"),
+		userRepository, providerRepository, modelRepository, registry, registry,
 	)
 	controlHandler := controlplane.NewResourceHTTPHandler(controlService, "admin-test-token", 1<<20, logger)
-	gatewayRuntime := controlplane.NewGatewayRuntime(keyRepository, providerRepository)
+	gatewayRuntime := controlplane.NewGatewayRuntime(keyRepository, modelRepository, providerRepository)
 	providerRuntime := controlplane.NewProviderRuntime(providerRepository)
 	adapterHandler := anthropic.NewHTTPHandler(
 		providerRuntime, staticSecrets{value: "anthropic-secret"}, providerServer.Client(),
@@ -156,13 +158,15 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 		AdapterAppID: "gwai-anthropic-test",
 		SecretRef:    daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic", Key: "api-key"},
 	})
-	qualifiedModel := provider.Slug + "/claude-test"
+	model := adminRequest[controlplane.Model](t, controlHandler, http.MethodPost, "/v1/models", controlplane.ModelInput{
+		Alias: "assistant", ProviderID: provider.ID, UpstreamModel: "claude-test",
+	})
 	createdKey := adminRequest[controlplane.CreatedVirtualKey](t, keyHandler, http.MethodPost, "/v1/virtual-keys", controlplane.VirtualKeyInput{
-		Name: "client", UserID: user.ID, AllowedModels: []string{qualifiedModel},
+		Name: "client", UserID: user.ID, ModelIDs: []string{model.ID},
 	})
 
 	requestBody := []byte(`{
-		"model":"anthropic-test/claude-test",
+		"model":"assistant",
 		"messages":[
 			{"role":"system","content":"Rispondi in italiano"},
 			{"role":"user","content":"Saluta"}
@@ -181,7 +185,7 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &completion); err != nil {
 		t.Fatal(err)
 	}
-	if completion.Model != qualifiedModel || completion.Choices[0].Message.Content == nil || *completion.Choices[0].Message.Content != "Ciao dal provider" {
+	if completion.Model != model.Alias || completion.Choices[0].Message.Content == nil || *completion.Choices[0].Message.Content != "Ciao dal provider" {
 		t.Fatalf("unexpected completion: %+v", completion)
 	}
 	if completion.Usage.PromptTokens != 8 || completion.Usage.TotalTokens != 12 {
@@ -193,7 +197,7 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 
 	responsesGateway := openairesponses.NewGatewayHTTPHandler(gatewayRuntime, invoker, 10<<20, time.Minute, logger)
 	request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{
-		"model":"anthropic-test/claude-test","input":"Saluta","max_output_tokens":64,"store":false
+		"model":"assistant","input":"Saluta","max_output_tokens":64,"store":false
 	}`)))
 	request.Header.Set("Authorization", "Bearer "+createdKey.Key)
 	request.Header.Set("Content-Type", "application/json")
@@ -212,7 +216,7 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 
 	anthropicGateway := anthropic.NewGatewayHTTPHandler(dataplane.NewDispatcher(gatewayRuntime, invoker, time.Minute), 10<<20, logger)
 	request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader([]byte(`{
-		"model":"anthropic-test/claude-test","max_tokens":64,"system":"Rispondi in italiano",
+		"model":"assistant","max_tokens":64,"system":"Rispondi in italiano",
 		"messages":[{"role":"user","content":"Saluta"}]
 	}`)))
 	request.Header.Set("x-api-key", createdKey.Key)
@@ -232,7 +236,7 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 	}
 
 	geminiGateway := gemini.NewGatewayHTTPHandler(gatewayRuntime, invoker, gemini.GatewayConfig{APIVersion: "v1beta", MaxBody: 10 << 20, RequestTimeout: time.Minute}, logger)
-	request = httptest.NewRequest(http.MethodPost, "/v1beta/models/anthropic-test/claude-test:generateContent", bytes.NewReader([]byte(`{
+	request = httptest.NewRequest(http.MethodPost, "/v1beta/models/assistant:generateContent", bytes.NewReader([]byte(`{
 		"systemInstruction":{"parts":[{"text":"Rispondi in italiano"}]},
 		"contents":[{"role":"user","parts":[{"text":"Saluta"}]}],
 		"generationConfig":{"maxOutputTokens":64}

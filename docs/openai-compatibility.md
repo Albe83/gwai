@@ -9,11 +9,16 @@ error envelope.
 
 ## Model routing
 
-`model` must use `provider-slug/upstream-model`. The gateway splits only the
-first `/`, resolves the active provider directly from the Dapr State Store, and
-invokes its configured `adapter_app_id`. The complete qualified name is returned
-unchanged in the response. Any upstream model ID is routable; there is no model
-catalog or alias lookup.
+`model` is a globally unique, immutable Model alias. The gateway resolves that
+catalog record, verifies that both the Model and its Provider are active, then
+invokes the Provider's configured `adapter_app_id`. Only the configured
+`upstream_model` enters the provider-neutral IR; provider endpoints and
+credentials remain outside it. The public response continues to identify the
+requested alias.
+
+A virtual key can use only the non-empty set of Model IDs assigned to it. Model
+aliases are never interpreted as provider protocol names, so adding or moving a
+Model does not introduce a gateway-to-adapter dependency.
 
 ## Supported request semantics
 

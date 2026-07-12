@@ -54,8 +54,6 @@ spec:
               value: {{ .Values.virtualKeyControlPlane.port | quote }}
             - name: GWAI_VIRTUAL_KEY_STATE_STORE
               value: {{ .Values.dapr.stateStores.virtualKeys.name | quote }}
-            - name: GWAI_PROVIDER_STATE_STORE
-              value: {{ .Values.dapr.stateStores.providers.name | quote }}
             - name: GWAI_MAX_BODY_BYTES
               value: {{ int64 .Values.virtualKeyControlPlane.maxBodyBytes | quote }}
             - name: GWAI_ADMIN_TOKEN

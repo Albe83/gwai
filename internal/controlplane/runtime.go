@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -12,19 +13,21 @@ import (
 // state components; it has no access to private control-plane user state.
 type GatewayRuntime struct {
 	keys      *VirtualKeyRepository
+	models    *ModelRepository
 	providers *ProviderRepository
 	now       func() time.Time
 }
 
-func NewGatewayRuntime(keys *VirtualKeyRepository, providers *ProviderRepository) *GatewayRuntime {
+func NewGatewayRuntime(keys *VirtualKeyRepository, models *ModelRepository, providers *ProviderRepository) *GatewayRuntime {
 	return &GatewayRuntime{
 		keys:      keys,
+		models:    models,
 		providers: providers,
 		now:       func() time.Time { return time.Now().UTC() },
 	}
 }
 
-func (r *GatewayRuntime) Authorize(ctx context.Context, token, qualifiedModel string) (Authorization, error) {
+func (r *GatewayRuntime) Authorize(ctx context.Context, token, requestedModel string) (Authorization, error) {
 	if token == "" {
 		return Authorization{}, ErrUnauthorized
 	}
@@ -48,29 +51,55 @@ func (r *GatewayRuntime) Authorize(ctx context.Context, token, qualifiedModel st
 	if subject.UserID != key.UserID || subject.Status != StatusActive || subject.Deleted {
 		return Authorization{}, ErrUnauthorized
 	}
-	model, err := ParseQualifiedModel(qualifiedModel)
+	model, err := r.resolveActiveModel(ctx, requestedModel)
 	if err != nil {
 		return Authorization{}, err
 	}
-	if len(key.AllowedModels) > 0 && !slices.Contains(key.AllowedModels, model.String()) {
+	if !slices.Contains(key.ModelIDs, model.ID) {
 		return Authorization{}, ErrForbidden
 	}
 	return Authorization{KeyID: key.ID, UserID: key.UserID}, nil
 }
 
-func (r *GatewayRuntime) ResolveRoute(ctx context.Context, qualifiedModel string) (Route, error) {
-	model, err := ParseQualifiedModel(qualifiedModel)
+func (r *GatewayRuntime) ResolveRoute(ctx context.Context, requestedModel string) (Route, error) {
+	model, err := r.resolveActiveModel(ctx, requestedModel)
 	if err != nil {
 		return Route{}, err
 	}
-	provider, err := resolveActiveProvider(ctx, r.providers, model.ProviderSlug)
+	provider, err := resolveActiveProviderByID(ctx, r.providers, model.ProviderID)
 	if err != nil {
 		return Route{}, err
 	}
 	return Route{
-		QualifiedModel: model.String(), ProviderID: provider.ID, UpstreamModel: model.UpstreamModel,
+		ModelID: model.ID, Alias: model.Alias, ProviderID: provider.ID, UpstreamModel: model.UpstreamModel,
 		AdapterAppID: provider.AdapterAppID,
 	}, nil
+}
+
+func (r *GatewayRuntime) resolveActiveModel(ctx context.Context, requestedModel string) (Model, error) {
+	alias := strings.TrimSpace(requestedModel)
+	if alias == "" || alias != requestedModel {
+		return Model{}, &ValidationError{Field: "model", Message: "must be a registered model alias without surrounding whitespace"}
+	}
+	model, err := r.models.GetModelByAlias(ctx, alias)
+	if err != nil {
+		return Model{}, err
+	}
+	if model.Status != StatusActive {
+		return Model{}, ErrForbidden
+	}
+	subject, err := r.keys.GetModelSubject(ctx, model.ID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Model{}, ErrForbidden
+		}
+		return Model{}, err
+	}
+	if subject.ModelID != model.ID || subject.Alias != model.Alias || subject.Status != StatusActive ||
+		subject.Deleted || subject.Revision != model.Revision {
+		return Model{}, ErrForbidden
+	}
+	return model, nil
 }
 
 // ProviderRuntime is the narrower adapter-side view: adapters can resolve only
@@ -89,6 +118,17 @@ func (r *ProviderRuntime) ResolveProviderBySlug(ctx context.Context, slug string
 
 func resolveActiveProvider(ctx context.Context, providers *ProviderRepository, slug string) (Provider, error) {
 	provider, err := providers.GetProviderBySlug(ctx, slug)
+	if err != nil {
+		return Provider{}, err
+	}
+	if provider.Status != StatusActive {
+		return Provider{}, ErrForbidden
+	}
+	return provider, nil
+}
+
+func resolveActiveProviderByID(ctx context.Context, providers *ProviderRepository, id string) (Provider, error) {
+	provider, err := providers.GetProvider(ctx, id)
 	if err != nil {
 		return Provider{}, err
 	}

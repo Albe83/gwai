@@ -5,12 +5,13 @@
 
 ## Context
 
-Operators need a browser interface for user, provider and virtual-key lifecycle
-management. The domain APIs are deliberately split across two independently
-deployed control planes and both accept a powerful bearer token. A browser-only
-single-page application would either hold that token or require a separate BFF
-anyway. It would also introduce CORS configuration and a second build ecosystem
-to a monorepo whose runtime currently uses only the Go standard library.
+Operators need a browser interface for user, Model, Provider and virtual-key
+lifecycle management. The domain APIs are deliberately split across two
+independently deployed control planes and both accept a powerful bearer token.
+A browser-only single-page application would either hold that token or require
+a separate BFF anyway. It would also introduce CORS configuration and a second
+build ecosystem to a monorepo whose runtime currently uses only the Go standard
+library.
 
 AngularJS is not a suitable foundation: upstream support ended in January
 2022. Adopting an end-of-life framework for a security-sensitive admin
@@ -25,7 +26,7 @@ Add an independently deployable `gwai-admin-webui` service implemented with Go
 standard-library `net/http`, `html/template` and embedded local assets. It is a
 server-rendered backend-for-frontend, not a new domain service:
 
-- users and providers remain owned by `gwai-control-plane`;
+- users, Models and Providers remain owned by `gwai-control-plane`;
 - virtual keys remain owned by `gwai-virtual-key-control-plane`;
 - the WebUI owns only short-lived browser sessions and CSRF state;
 - the WebUI has no State Store scope and is absent from the inference path.

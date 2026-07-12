@@ -11,6 +11,15 @@ import (
 	"github.com/Albe83/gwai/internal/state"
 )
 
+func syncTestModelSubject(t *testing.T, repository *VirtualKeyRepository, id string, now time.Time) {
+	t.Helper()
+	if err := repository.SyncModelSubject(context.Background(), ModelSubject{
+		ModelID: id, Alias: id, Status: StatusActive, Revision: 1, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVirtualKeyRepositorySubjectRevisionsAndTombstone(t *testing.T) {
 	repository := NewVirtualKeyRepository(state.NewMemoryStore())
 	ctx := context.Background()
@@ -123,9 +132,10 @@ func TestVirtualKeyRepositoryMaintainsUserIndexesAndFences(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	syncTestModelSubject(t, repository, "mdl_keys", now)
 	key := VirtualKey{
 		ID: "key_move", Name: "move", UserID: "usr_first", Prefix: "gwai_test", KeyHash: hashKey("gwai_test_secret"),
-		Status: StatusActive, CreatedAt: now, UpdatedAt: now,
+		ModelIDs: []string{"mdl_keys"}, Status: StatusActive, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := repository.CreateVirtualKey(ctx, key); err != nil {
 		t.Fatal(err)
@@ -228,9 +238,10 @@ func TestCreateVirtualKeyAndFenceCompeteOnSubjectETag(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	syncTestModelSubject(t, creator, "mdl_race", now)
 	key := VirtualKey{
 		ID: "key_race", Name: "race", UserID: "usr_race", Prefix: "gwai_race", KeyHash: hashKey("gwai_race_secret"),
-		Status: StatusActive, CreatedAt: now, UpdatedAt: now,
+		ModelIDs: []string{"mdl_race"}, Status: StatusActive, CreatedAt: now, UpdatedAt: now,
 	}
 	createResult := make(chan error, 1)
 	go func() { createResult <- creator.CreateVirtualKey(ctx, key) }()
@@ -268,9 +279,10 @@ func TestMoveVirtualKeyAndTargetFenceCompeteOnSubjectETag(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	syncTestModelSubject(t, setup, "mdl_move", now)
 	key := VirtualKey{
 		ID: "key_move_race", Name: "move", UserID: "usr_move_source", Prefix: "gwai_move",
-		KeyHash: hashKey("gwai_move_secret"), Status: StatusActive, CreatedAt: now, UpdatedAt: now,
+		KeyHash: hashKey("gwai_move_secret"), ModelIDs: []string{"mdl_move"}, Status: StatusActive, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := setup.CreateVirtualKey(ctx, key); err != nil {
 		t.Fatal(err)
@@ -315,7 +327,9 @@ func TestMoveVirtualKeyAndTargetFenceCompeteOnSubjectETag(t *testing.T) {
 func TestGatewayRuntimeFailsClosedWithoutActiveSubject(t *testing.T) {
 	keyStore := state.NewMemoryStore()
 	keys := NewVirtualKeyRepository(keyStore)
-	providers := NewProviderRepository(state.NewMemoryStore())
+	providerStore := state.NewMemoryStore()
+	providers := NewProviderRepository(providerStore)
+	models := NewModelRepository(providerStore)
 	ctx := context.Background()
 	now := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
 	provider := Provider{
@@ -323,6 +337,16 @@ func TestGatewayRuntimeFailsClosedWithoutActiveSubject(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := providers.CreateProvider(ctx, provider); err != nil {
+		t.Fatal(err)
+	}
+	model := Model{
+		ID: "mdl_runtime", Alias: "runtime-model", ProviderID: provider.ID, UpstreamModel: "model",
+		Status: StatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := models.CreateModel(ctx, model); err != nil {
+		t.Fatal(err)
+	}
+	if err := keys.SyncModelSubject(ctx, modelSubjectFor(model, false)); err != nil {
 		t.Fatal(err)
 	}
 	if err := keys.SyncSubject(ctx, KeySubject{
@@ -333,20 +357,20 @@ func TestGatewayRuntimeFailsClosedWithoutActiveSubject(t *testing.T) {
 	token := "gwai_runtime_secret"
 	key := VirtualKey{
 		ID: "key_runtime", Name: "runtime", UserID: "usr_runtime", Prefix: "gwai_runtime", KeyHash: hashKey(token),
-		AllowedModels: []string{"runtime/model"}, Status: StatusActive, CreatedAt: now, UpdatedAt: now,
+		ModelIDs: []string{model.ID}, Status: StatusActive, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := keys.CreateVirtualKey(ctx, key); err != nil {
 		t.Fatal(err)
 	}
-	runtime := NewGatewayRuntime(keys, providers)
+	runtime := NewGatewayRuntime(keys, models, providers)
 	runtime.now = func() time.Time { return now }
-	if _, err := runtime.Authorize(ctx, token, "runtime/model"); err != nil {
+	if _, err := runtime.Authorize(ctx, token, model.Alias); err != nil {
 		t.Fatalf("active subject should authorize: %v", err)
 	}
 	if err := keyStore.Transact(ctx, []state.Operation{{Type: state.Delete, Key: keySubjectKey(key.UserID)}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.Authorize(ctx, token, "runtime/model"); !errors.Is(err, ErrUnauthorized) {
+	if _, err := runtime.Authorize(ctx, token, model.Alias); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("missing subject must fail closed, got %v", err)
 	}
 	resolved, err := NewProviderRuntime(providers).ResolveProviderBySlug(ctx, provider.Slug)
