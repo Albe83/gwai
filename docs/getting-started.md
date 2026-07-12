@@ -115,6 +115,46 @@ cluster-internal and terminate TLS before exposing the WebUI on a network. Set
 `adminWebUI.secureCookies=true` for that HTTPS deployment so the session cookie
 also receives the `Secure` flag and the service emits HSTS.
 
+### Expose the WebUI with Gateway API
+
+The chart can attach the WebUI Service to an existing Gateway API `Gateway` by
+creating an optional `gateway.networking.k8s.io/v1` `HTTPRoute`. The cluster
+must already have the Gateway API CRDs, a controller and an HTTPS listener with
+TLS termination. The chart does not create the Gateway or its certificate.
+
+```yaml
+adminWebUI:
+  secureCookies: true
+  httpRoute:
+    enabled: true
+    annotations: {}
+    parentRefs:
+      - name: edge-gateway
+        namespace: gateway-system
+        sectionName: https
+    hostnames:
+      - admin.example.com
+```
+
+`parentRefs` accepts multiple Gateways. Each reference requires `name` and
+`sectionName`, can additionally select `namespace`, and must identify an HTTPS
+listener. Port-based listener selection is intentionally excluded because it is
+an Extended Gateway API feature and is redundant with `sectionName`. At least
+one explicit administrative hostname is required.
+A cross-namespace Gateway must allow routes from the gwai namespace through its
+listener `allowedRoutes` policy.
+
+The chart rejects an enabled HTTPRoute unless `secureCookies=true` and every
+reference names a listener. It cannot inspect the referenced Gateway, so the
+operator remains responsible for ensuring that each `sectionName` really is an
+HTTPS listener with a valid certificate. After the Helm upgrade, verify that
+the controller reports both `Accepted=True` and `ResolvedRefs=True` before
+opening the hostname:
+
+```bash
+kubectl -n gwai describe httproute gwai-admin-webui
+```
+
 ## 4. Provision a provider and client key
 
 ```bash

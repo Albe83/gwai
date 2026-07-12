@@ -72,6 +72,88 @@
 {{- if not (kindIs "bool" .Values.adminWebUI.secureCookies) }}
 {{- fail "adminWebUI.secureCookies must be a boolean" }}
 {{- end }}
+{{- if not (kindIs "bool" .Values.adminWebUI.httpRoute.enabled) }}
+{{- fail "adminWebUI.httpRoute.enabled must be a boolean" }}
+{{- end }}
+{{- if .Values.adminWebUI.httpRoute.enabled }}
+{{- $dnsSubdomainPattern := "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" }}
+{{- $dnsLabelPattern := "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }}
+{{- $hostnamePattern := "^(\\*\\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" }}
+{{- if not .Values.adminWebUI.secureCookies }}
+{{- fail "adminWebUI.secureCookies must be true when adminWebUI.httpRoute.enabled=true" }}
+{{- end }}
+{{- if not (kindIs "map" .Values.adminWebUI.httpRoute.annotations) }}
+{{- fail "adminWebUI.httpRoute.annotations must be a map" }}
+{{- end }}
+{{- range $key, $value := .Values.adminWebUI.httpRoute.annotations }}
+{{- if not (kindIs "string" $value) }}
+{{- fail (printf "adminWebUI.httpRoute.annotations[%s] must be a string" $key) }}
+{{- end }}
+{{- end }}
+{{- if not (kindIs "slice" .Values.adminWebUI.httpRoute.parentRefs) }}
+{{- fail "adminWebUI.httpRoute.parentRefs must be a list" }}
+{{- end }}
+{{- if eq (len .Values.adminWebUI.httpRoute.parentRefs) 0 }}
+{{- fail "adminWebUI.httpRoute.parentRefs must contain at least one Gateway when the HTTPRoute is enabled" }}
+{{- end }}
+{{- if gt (len .Values.adminWebUI.httpRoute.parentRefs) 32 }}
+{{- fail "adminWebUI.httpRoute.parentRefs must contain at most 32 Gateways" }}
+{{- end }}
+{{- $parentRefs := dict }}
+{{- range $index, $parent := .Values.adminWebUI.httpRoute.parentRefs }}
+{{- if not (kindIs "map" $parent) }}
+{{- fail (printf "adminWebUI.httpRoute.parentRefs[%d] must be a map" $index) }}
+{{- end }}
+{{- if or (not (hasKey $parent "name")) (not (kindIs "string" $parent.name)) (not $parent.name) }}
+{{- fail (printf "adminWebUI.httpRoute.parentRefs[%d].name is required" $index) }}
+{{- end }}
+{{- if or (gt (len $parent.name) 253) (not (regexMatch $dnsSubdomainPattern $parent.name)) }}
+{{- fail (printf "adminWebUI.httpRoute.parentRefs[%d].name must be a valid DNS subdomain no longer than 253 characters" $index) }}
+{{- end }}
+{{- if hasKey $parent "namespace" }}
+{{- if not (kindIs "string" $parent.namespace) }}
+{{- fail (printf "adminWebUI.httpRoute.parentRefs[%d].namespace must be a string" $index) }}
+{{- end }}
+{{- if and $parent.namespace (or (gt (len $parent.namespace) 63) (not (regexMatch $dnsLabelPattern $parent.namespace))) }}
+{{- fail (printf "adminWebUI.httpRoute.parentRefs[%d].namespace must be empty or a valid DNS label no longer than 63 characters" $index) }}
+{{- end }}
+{{- end }}
+{{- if or (not (hasKey $parent "sectionName")) (not (kindIs "string" $parent.sectionName)) (not $parent.sectionName) }}
+{{- fail (printf "adminWebUI.httpRoute.parentRefs[%d].sectionName must select an HTTPS Gateway listener" $index) }}
+{{- end }}
+{{- if or (gt (len $parent.sectionName) 253) (not (regexMatch $dnsSubdomainPattern $parent.sectionName)) }}
+{{- fail (printf "adminWebUI.httpRoute.parentRefs[%d].sectionName must be a valid Gateway API section name no longer than 253 characters" $index) }}
+{{- end }}
+{{- if hasKey $parent "port" }}
+{{- fail (printf "adminWebUI.httpRoute.parentRefs[%d].port is unsupported; select the HTTPS listener by sectionName" $index) }}
+{{- end }}
+{{- $parentNamespace := default $.Release.Namespace $parent.namespace }}
+{{- $parentKey := printf "%s/%s/%s" $parentNamespace $parent.name $parent.sectionName }}
+{{- if hasKey $parentRefs $parentKey }}
+{{- fail (printf "adminWebUI.httpRoute.parentRefs[%d] duplicates Gateway listener %s" $index $parentKey) }}
+{{- end }}
+{{- $_ := set $parentRefs $parentKey true }}
+{{- end }}
+{{- if not (kindIs "slice" .Values.adminWebUI.httpRoute.hostnames) }}
+{{- fail "adminWebUI.httpRoute.hostnames must be a list" }}
+{{- end }}
+{{- if eq (len .Values.adminWebUI.httpRoute.hostnames) 0 }}
+{{- fail "adminWebUI.httpRoute.hostnames must contain at least one administrative hostname when the HTTPRoute is enabled" }}
+{{- end }}
+{{- if gt (len .Values.adminWebUI.httpRoute.hostnames) 16 }}
+{{- fail "adminWebUI.httpRoute.hostnames must contain at most 16 entries" }}
+{{- end }}
+{{- $hostnames := dict }}
+{{- range $index, $hostname := .Values.adminWebUI.httpRoute.hostnames }}
+{{- if or (not (kindIs "string" $hostname)) (not $hostname) (gt (len $hostname) 253) (not (regexMatch $hostnamePattern $hostname)) }}
+{{- fail (printf "adminWebUI.httpRoute.hostnames[%d] must be a valid lowercase DNS hostname, optionally prefixed by '*.', no longer than 253 characters" $index) }}
+{{- end }}
+{{- if hasKey $hostnames $hostname }}
+{{- fail (printf "adminWebUI.httpRoute.hostnames[%d] duplicates hostname %s" $index $hostname) }}
+{{- end }}
+{{- $_ := set $hostnames $hostname true }}
+{{- end }}
+{{- end }}
 {{- if eq (len .Values.gateways) 0 }}
 {{- fail "at least one gateways entry is required" }}
 {{- end }}

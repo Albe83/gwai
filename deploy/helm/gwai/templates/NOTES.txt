@@ -4,7 +4,9 @@ Read the generated control-plane admin token:
   kubectl -n {{ .Release.Namespace }} get secret {{ include "gwai.adminSecretName" . }} -o jsonpath='{.data.{{ .Values.admin.secretKey }}}' | base64 -d
 
 Reach the APIs locally:
+{{- if not .Values.adminWebUI.httpRoute.enabled }}
   kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.adminWebUIName" . }} 28087:{{ .Values.adminWebUI.service.port }}
+{{- end }}
   kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.controlPlaneName" . }} 8081:{{ .Values.controlPlane.port }}
   kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.virtualKeyControlPlaneName" . }} 8082:{{ .Values.virtualKeyControlPlane.port }}
 {{ range $gateway := .Values.gateways }}
@@ -14,8 +16,26 @@ Reach the APIs locally:
 Provider API keys are not Helm values. Create a Kubernetes Secret and reference
 its name/key when creating the provider in the control-plane API.
 
+{{- if not .Values.adminWebUI.httpRoute.enabled }}
+
 The administrative UI is available at http://127.0.0.1:28087 after its
 port-forward starts. It authenticates with the generated admin token above.
+{{- else }}
+
+An HTTPRoute named {{ include "gwai.adminWebUIName" . | quote }} now targets the
+administrative UI Service. Confirm that its parent Gateway accepted it:
+  kubectl -n {{ .Release.Namespace }} describe httproute {{ include "gwai.adminWebUIName" . }}
+{{- with .Values.adminWebUI.httpRoute.hostnames }}
+
+Configured WebUI hostname matches:
+{{- range . }}
+  - {{ . }}
+{{- end }}
+
+Open a concrete matching hostname over HTTPS. Plain HTTP and loopback
+port-forwarding cannot establish this deployment's Secure session cookie.
+{{- end }}
+{{- end }}
 {{- if .Values.admin.existingSecret }}
 
 After rotating external Secret {{ .Values.admin.existingSecret | quote }},

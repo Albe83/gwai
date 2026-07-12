@@ -59,7 +59,9 @@ databases. The contract is
 
 - Separate CRUD services for users/providers and virtual keys.
 - A server-rendered administrative WebUI for user, provider and virtual-key
-  lifecycle operations; the admin credential remains in its Go backend.
+  lifecycle operations; the admin credential remains in its Go backend, and an
+  optional Gateway API HTTPRoute can expose it through an existing HTTPS
+  Gateway.
 - One-time virtual-key disclosure with exact `provider/model` allowlists,
   expiry and user/key/provider disablement.
 - Revisioned user-subject projection, atomic deletion fencing and fail-closed
