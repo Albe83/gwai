@@ -607,13 +607,17 @@ func TestCompleteCRUDLifecycleAndOneTimeReveal(t *testing.T) {
 	if !strings.Contains(keyForm.Body.String(), `name="model_ids" value="mdl_one"`) || strings.Contains(keyForm.Body.String(), `name="allowed_models"`) {
 		t.Fatalf("key form did not render explicit model choices: %s", keyForm.Body.String())
 	}
-	keyValues := url.Values{"_csrf": {csrf}, "_operation": {operationFromBody(t, keyForm.Body.String())}, "name": {"CLI"}, "user_id": {"usr_one"}, "model_ids": {"mdl_one", "mdl_one"}, "status": {"active"}}
+	keyValues := url.Values{"_csrf": {csrf}, "_operation": {operationFromBody(t, keyForm.Body.String())}, "name": {"CLI"}, "user_id": {"usr_one"}, "model_ids": {"mdl_one", "mdl_one"}, "status": {"active"}, "expires_at": {"2099-12-31T23:59"}}
 	createdKey := request(handler, http.MethodPost, "/virtual-keys", cookie, keyValues)
 	if createdKey.Code != http.StatusCreated || !strings.Contains(createdKey.Body.String(), api.secret) || !strings.Contains(createdKey.Header().Get("Cache-Control"), "no-store") {
 		t.Fatalf("key creation did not return the one-time secret safely: %d body=%q", createdKey.Code, createdKey.Body.String())
 	}
 	if len(api.lastKeyInput.ModelIDs) != 1 || api.lastKeyInput.ModelIDs[0] != "mdl_one" {
 		t.Fatalf("model IDs were not normalized: %+v", api.lastKeyInput.ModelIDs)
+	}
+	wantExpiry := time.Date(2099, 12, 31, 23, 59, 0, 0, time.UTC)
+	if api.lastKeyInput.ExpiresAt == nil || !api.lastKeyInput.ExpiresAt.Equal(wantExpiry) {
+		t.Fatalf("browser minute-precision expiry = %v, want %v", api.lastKeyInput.ExpiresAt, wantExpiry)
 	}
 	secondSubmit := request(handler, http.MethodPost, "/virtual-keys", cookie, keyValues)
 	if secondSubmit.Code != http.StatusConflict || strings.Contains(secondSubmit.Body.String(), api.secret) {
@@ -766,11 +770,118 @@ func TestErrorsAndUntrustedValuesAreSafelyRendered(t *testing.T) {
 func TestVirtualKeyExpiryRoundTripPreservesSubsecondPrecision(t *testing.T) {
 	expires := time.Date(2026, 7, 12, 12, 34, 59, 123456789, time.UTC)
 	form := virtualKeyFormFromModel(controlplane.PublicVirtualKey{ModelIDs: []string{"mdl_one"}, ExpiresAt: &expires})
+	if form.ExpiresAt != "2026-07-12T12:34:59.123" {
+		t.Fatalf("browser expiry value = %q, want millisecond precision", form.ExpiresAt)
+	}
+	if form.OriginalExpiresAt != "2026-07-12T12:34:59.123456789Z" {
+		t.Fatalf("original expiry value = %q", form.OriginalExpiresAt)
+	}
 	input, err := form.input()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if input.ExpiresAt == nil || !input.ExpiresAt.Equal(expires) {
 		t.Fatalf("expiry round-trip = %v, want %v (form %q)", input.ExpiresAt, expires, form.ExpiresAt)
+	}
+	form.ExpiresAt = "2026-07-12T12:34:59.124"
+	input, err = form.input()
+	wantChanged := time.Date(2026, 7, 12, 12, 34, 59, 124000000, time.UTC)
+	if err != nil || input.ExpiresAt == nil || !input.ExpiresAt.Equal(wantChanged) {
+		t.Fatalf("changed expiry = %v, want %v (error %v)", input.ExpiresAt, wantChanged, err)
+	}
+}
+
+func TestVirtualKeyExpiryAcceptsBrowserDateTimeFormats(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  time.Time
+	}{
+		{name: "minutes", value: "2026-07-12T12:34", want: time.Date(2026, 7, 12, 12, 34, 0, 0, time.UTC)},
+		{name: "seconds", value: "2026-07-12T12:34:59", want: time.Date(2026, 7, 12, 12, 34, 59, 0, time.UTC)},
+		{name: "one fractional digit", value: "2026-07-12T12:34:59.1", want: time.Date(2026, 7, 12, 12, 34, 59, 100000000, time.UTC)},
+		{name: "two fractional digits", value: "2026-07-12T12:34:59.12", want: time.Date(2026, 7, 12, 12, 34, 59, 120000000, time.UTC)},
+		{name: "milliseconds", value: "2026-07-12T12:34:59.123", want: time.Date(2026, 7, 12, 12, 34, 59, 123000000, time.UTC)},
+		{name: "surrounding whitespace", value: " 2026-07-12T12:34 ", want: time.Date(2026, 7, 12, 12, 34, 0, 0, time.UTC)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input, err := (virtualKeyForm{ModelIDs: []string{"mdl_one"}, ExpiresAt: test.value}).input()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if input.ExpiresAt == nil || !input.ExpiresAt.Equal(test.want) {
+				t.Fatalf("expiry = %v, want %v", input.ExpiresAt, test.want)
+			}
+		})
+	}
+}
+
+func TestVirtualKeyExpiryRejectsInvalidDateTimeFormats(t *testing.T) {
+	for _, value := range []string{
+		"2026-07-12",
+		"2026-07-12T12:34Z",
+		"2026-07-12T12:34+02:00",
+		"2026-07-12T12:34:59,123",
+		"2026-07-12T12:34:59.1234",
+		"2026-07-12T12:34:59.123456789",
+		"2026-02-30T12:34",
+		"not-a-date",
+	} {
+		t.Run(value, func(t *testing.T) {
+			_, err := (virtualKeyForm{ModelIDs: []string{"mdl_one"}, ExpiresAt: value}).input()
+			if err == nil || !strings.Contains(err.Error(), "valid UTC date and time") {
+				t.Fatalf("expiry %q returned %v", value, err)
+			}
+		})
+	}
+}
+
+func TestVirtualKeyExpiryMayBeEmpty(t *testing.T) {
+	input, err := (virtualKeyForm{ModelIDs: []string{"mdl_one"}, ExpiresAt: " \t "}).input()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.ExpiresAt != nil {
+		t.Fatalf("empty expiry = %v, want nil", input.ExpiresAt)
+	}
+}
+
+func TestVirtualKeyEditAndStatusPreserveAPISubmillisecondExpiry(t *testing.T) {
+	expires := time.Date(2026, 7, 13, 12, 34, 59, 123456789, time.UTC)
+	api := &fakeAPI{
+		users:  []controlplane.User{{ID: "usr_one", Name: "Ada", Status: controlplane.StatusActive}},
+		models: []controlplane.Model{{ID: "mdl_one", Alias: "claude", ProviderID: "prv_one", UpstreamModel: "claude", Status: controlplane.StatusActive}},
+		keys: []controlplane.PublicVirtualKey{{
+			ID: "key_one", Name: "CLI", UserID: "usr_one", ModelIDs: []string{"mdl_one"},
+			Status: controlplane.StatusActive, ExpiresAt: &expires,
+		}},
+	}
+	handler := newTestHandler(t, api, time.Now, false)
+	cookie, csrf := login(t, handler)
+
+	page := request(handler, http.MethodGet, "/virtual-keys/key_one/edit", cookie, nil)
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `name="expires_at" type="datetime-local" step="any" value="2026-07-13T12:34:59.123"`) {
+		t.Fatalf("edit form did not render an HTML-valid expiry: %d %s", page.Code, page.Body.String())
+	}
+	if !strings.Contains(page.Body.String(), `name="expires_at_original" value="2026-07-13T12:34:59.123456789Z"`) {
+		t.Fatalf("edit form omitted the precise original expiry: %s", page.Body.String())
+	}
+
+	updated := request(handler, http.MethodPost, "/virtual-keys/key_one", cookie, url.Values{
+		"_csrf": {csrf}, "_etag": {fakeETag}, "name": {"CLI"}, "user_id": {"usr_one"},
+		"model_ids": {"mdl_one"}, "status": {"active"}, "expires_at": {"2026-07-13T12:34:59.123"},
+		"expires_at_original": {"2026-07-13T12:34:59.123456789Z"},
+	})
+	if updated.Code != http.StatusSeeOther || api.lastKeyInput.ExpiresAt == nil || !api.lastKeyInput.ExpiresAt.Equal(expires) {
+		t.Fatalf("unchanged edit expiry = %v, status %d", api.lastKeyInput.ExpiresAt, updated.Code)
+	}
+
+	changedStatus := request(handler, http.MethodPost, "/virtual-keys/key_one/status", cookie, url.Values{
+		"_csrf": {csrf}, "_etag": {fakeETag}, "status": {"disabled"},
+	})
+	if changedStatus.Code != http.StatusSeeOther || api.lastKeyInput.ExpiresAt == nil || !api.lastKeyInput.ExpiresAt.Equal(expires) {
+		t.Fatalf("status-change expiry = %v, status %d", api.lastKeyInput.ExpiresAt, changedStatus.Code)
 	}
 }

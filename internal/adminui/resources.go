@@ -884,7 +884,8 @@ func virtualKeyFormFromRequest(r *http.Request) virtualKeyForm {
 	}
 	return virtualKeyForm{
 		Name: formString(r, "name"), UserID: formString(r, "user_id"),
-		ModelIDs: modelIDs, Status: statusValue(r.PostForm.Get("status")), ExpiresAt: formString(r, "expires_at"),
+		ModelIDs: modelIDs, Status: statusValue(r.PostForm.Get("status")),
+		ExpiresAt: formString(r, "expires_at"), OriginalExpiresAt: formString(r, "expires_at_original"),
 	}
 }
 
@@ -893,6 +894,7 @@ func (s *server) createVirtualKey(w http.ResponseWriter, r *http.Request, sessio
 		return
 	}
 	form := virtualKeyFormFromRequest(r)
+	form.OriginalExpiresAt = ""
 	if !s.sessions.consumeKeyCreationToken(session.ID, r.PostForm.Get("_operation")) {
 		data := s.basePage(session, "Create virtual key", "virtual-keys")
 		data.VirtualKeyForm = &form
@@ -1035,13 +1037,11 @@ func (s *server) changeVirtualKeyStatus(w http.ResponseWriter, r *http.Request, 
 	versioned, err := s.api.GetVirtualKey(r.Context(), id)
 	if err == nil {
 		key := versioned.Value
-		input, inputErr := virtualKeyFormFromModel(key).input()
-		if inputErr != nil {
-			err = inputErr
-		} else {
-			input.Status = controlplane.Status(status)
-			_, err = s.api.UpdateVirtualKey(r.Context(), id, input, etag)
+		input := controlplane.VirtualKeyInput{
+			Name: key.Name, UserID: key.UserID, ModelIDs: slices.Clone(key.ModelIDs),
+			Status: controlplane.Status(status), ExpiresAt: key.ExpiresAt,
 		}
+		_, err = s.api.UpdateVirtualKey(r.Context(), id, input, etag)
 	}
 	if err != nil {
 		data := s.basePage(session, "Change key status", "virtual-keys")
