@@ -32,10 +32,17 @@ func New(baseURL, apiToken string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	// Dapr building-block endpoints are terminal API calls. Following a redirect
+	// could forward the custom dapr-api-token header to an unrelated origin, so
+	// use a private client copy and always surface 3xx responses to the caller.
+	client := *httpClient
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	return &Client{
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		apiToken: apiToken,
-		http:     httpClient,
+		http:     &client,
 	}
 }
 
@@ -50,16 +57,31 @@ func (c *Client) newRequest(ctx context.Context, method, endpoint string, body i
 	return request, nil
 }
 
-func (c *Client) Invoke(ctx context.Context, appID, method string, body io.Reader, contentType string) (*http.Response, error) {
+// InvokeMethod invokes an application route through Dapr while preserving the
+// caller's HTTP method and selected headers. Dapr service invocation is not
+// limited to POST; administrative REST clients in particular need GET, PUT and
+// DELETE to reach method-aware handlers without tunnelling verbs in a payload.
+func (c *Client) InvokeMethod(ctx context.Context, httpMethod, appID, method string, body io.Reader, headers http.Header) (*http.Response, error) {
 	endpoint := "/v1.0/invoke/" + url.PathEscape(appID) + "/method/" + strings.TrimLeft(method, "/")
-	request, err := c.newRequest(ctx, http.MethodPost, endpoint, body)
+	request, err := c.newRequest(ctx, httpMethod, endpoint, body)
 	if err != nil {
 		return nil, fmt.Errorf("create Dapr invocation request: %w", err)
 	}
-	if contentType != "" {
-		request.Header.Set("Content-Type", contentType)
+	if headers != nil {
+		request.Header = headers.Clone()
+		if c.apiToken != "" {
+			request.Header.Set("dapr-api-token", c.apiToken)
+		}
 	}
 	return c.http.Do(request)
+}
+
+func (c *Client) Invoke(ctx context.Context, appID, method string, body io.Reader, contentType string) (*http.Response, error) {
+	headers := make(http.Header)
+	if contentType != "" {
+		headers.Set("Content-Type", contentType)
+	}
+	return c.InvokeMethod(ctx, http.MethodPost, appID, method, body, headers)
 }
 
 func (c *Client) InvokeJSON(ctx context.Context, appID, method string, input, output any) error {

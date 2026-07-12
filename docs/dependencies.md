@@ -3,6 +3,13 @@
 Runtime Go code uses only the standard library. This keeps each service static,
 small, and independent of provider or Dapr SDK release cycles.
 
+The administrative WebUI follows the same constraint: `html/template` provides
+context-aware escaping, `embed` packages its local CSS/JavaScript, and
+`net/http` implements the BFF and session boundary. It loads no CDN resources
+and introduces no Node/npm runtime or build dependency. The small local script
+only progressively enhances server-rendered forms; lifecycle operations remain
+owned by the existing Go control-plane APIs.
+
 | Dependency | Scope | Why it exists | License / maintenance note |
 | --- | --- | --- | --- |
 | Go 1.26 | Build/runtime | Memory-safe static services and strong HTTP/JSON tooling | BSD-3-Clause; supported upstream release line |

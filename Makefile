@@ -8,19 +8,19 @@ K3S ?= /usr/local/bin/k3s
 JQ ?= jq
 REGISTRY ?= localhost
 TAG ?= dev
-SERVICES := control-plane virtual-key-control-plane \
+SERVICES := control-plane virtual-key-control-plane admin-webui \
 	openai-gateway openai-responses-gateway anthropic-gateway gemini-gateway \
 	openai-chat-adapter openai-responses-adapter anthropic-adapter gemini-adapter
 IMAGE_PREFIX := $(if $(REGISTRY),$(REGISTRY)/,)
 IMAGES := $(foreach service,$(SERVICES),$(IMAGE_PREFIX)gwai-$(service):$(TAG))
 
-.PHONY: all build test test-race vet fmt-check contracts-check scripts-check check images images-load-k3s local-deploy e2e-k3s helm-lint deploy undeploy port-forward
+.PHONY: all build test test-race vet fmt-check contracts-check scripts-check check images images-load-k3s local-deploy e2e-k3s helm-lint deploy undeploy port-forward admin-webui-port-forward
 
 all: check build
 
 build:
 	@mkdir -p bin
-	@for service in $(SERVICES); do \
+	@set -euo pipefail; for service in $(SERVICES); do \
 		$(GO) build -trimpath -o bin/$$service ./cmd/$$service; \
 	done
 
@@ -45,7 +45,7 @@ scripts-check:
 check: fmt-check vet test-race contracts-check scripts-check helm-lint
 
 images:
-	@for service in $(SERVICES); do \
+	@set -euo pipefail; for service in $(SERVICES); do \
 		docker build --build-arg SERVICE=$$service \
 			-t $(IMAGE_PREFIX)gwai-$$service:$(TAG) .; \
 	done
@@ -83,3 +83,6 @@ undeploy:
 
 port-forward:
 	$(KUBECTL) --namespace gwai port-forward service/gwai-openai-gateway 8080:8080
+
+admin-webui-port-forward:
+	$(KUBECTL) --namespace gwai port-forward service/gwai-admin-webui 28087:8080

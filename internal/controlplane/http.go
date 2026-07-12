@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/Albe83/gwai/internal/platform"
 )
@@ -61,6 +62,21 @@ func (h *adminHTTP) writeError(w http.ResponseWriter, r *http.Request, err error
 	}
 }
 
+func (h *adminHTTP) writeEntity(w http.ResponseWriter, r *http.Request, status int, etagValue, response any) {
+	etag, err := entityETag(etagValue)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("ETag", etag)
+	platform.JSON(w, status, response)
+}
+
+func requestIfMatch(r *http.Request) ifMatchPrecondition {
+	values, present := r.Header[http.CanonicalHeaderKey("If-Match")]
+	return ifMatchPrecondition{present: present, value: strings.Join(values, ",")}
+}
+
 type ResourceHTTPHandler struct {
 	*adminHTTP
 	service *ResourceService
@@ -99,7 +115,7 @@ func (h *ResourceHTTPHandler) createUser(w http.ResponseWriter, r *http.Request)
 		h.writeError(w, r, err)
 		return
 	}
-	platform.JSON(w, http.StatusCreated, user)
+	h.writeEntity(w, r, http.StatusCreated, user, user)
 }
 
 func (h *ResourceHTTPHandler) listUsers(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +133,7 @@ func (h *ResourceHTTPHandler) getUser(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
-	platform.JSON(w, http.StatusOK, user)
+	h.writeEntity(w, r, http.StatusOK, user, user)
 }
 
 func (h *ResourceHTTPHandler) updateUser(w http.ResponseWriter, r *http.Request) {
@@ -125,16 +141,16 @@ func (h *ResourceHTTPHandler) updateUser(w http.ResponseWriter, r *http.Request)
 	if !h.decode(w, r, &input) {
 		return
 	}
-	user, err := h.service.UpdateUser(r.Context(), r.PathValue("id"), input)
+	user, err := h.service.updateUser(r.Context(), r.PathValue("id"), input, requestIfMatch(r))
 	if err != nil {
 		h.writeError(w, r, err)
 		return
 	}
-	platform.JSON(w, http.StatusOK, user)
+	h.writeEntity(w, r, http.StatusOK, user, user)
 }
 
 func (h *ResourceHTTPHandler) deleteUser(w http.ResponseWriter, r *http.Request) {
-	if err := h.service.DeleteUser(r.Context(), r.PathValue("id")); err != nil {
+	if err := h.service.deleteUser(r.Context(), r.PathValue("id"), requestIfMatch(r)); err != nil {
 		h.writeError(w, r, err)
 		return
 	}
@@ -151,7 +167,7 @@ func (h *ResourceHTTPHandler) createProvider(w http.ResponseWriter, r *http.Requ
 		h.writeError(w, r, err)
 		return
 	}
-	platform.JSON(w, http.StatusCreated, provider)
+	h.writeEntity(w, r, http.StatusCreated, provider, provider)
 }
 
 func (h *ResourceHTTPHandler) listProviders(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +185,7 @@ func (h *ResourceHTTPHandler) getProvider(w http.ResponseWriter, r *http.Request
 		h.writeError(w, r, err)
 		return
 	}
-	platform.JSON(w, http.StatusOK, provider)
+	h.writeEntity(w, r, http.StatusOK, provider, provider)
 }
 
 func (h *ResourceHTTPHandler) updateProvider(w http.ResponseWriter, r *http.Request) {
@@ -177,16 +193,16 @@ func (h *ResourceHTTPHandler) updateProvider(w http.ResponseWriter, r *http.Requ
 	if !h.decode(w, r, &input) {
 		return
 	}
-	provider, err := h.service.UpdateProvider(r.Context(), r.PathValue("id"), input)
+	provider, err := h.service.updateProvider(r.Context(), r.PathValue("id"), input, requestIfMatch(r))
 	if err != nil {
 		h.writeError(w, r, err)
 		return
 	}
-	platform.JSON(w, http.StatusOK, provider)
+	h.writeEntity(w, r, http.StatusOK, provider, provider)
 }
 
 func (h *ResourceHTTPHandler) deleteProvider(w http.ResponseWriter, r *http.Request) {
-	if err := h.service.DeleteProvider(r.Context(), r.PathValue("id")); err != nil {
+	if err := h.service.deleteProvider(r.Context(), r.PathValue("id"), requestIfMatch(r)); err != nil {
 		h.writeError(w, r, err)
 		return
 	}

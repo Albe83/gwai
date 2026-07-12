@@ -53,6 +53,10 @@ valkey:
   databases: 16 # bundled server; every redisDB must be below this value
 ```
 
+It also deploys `gwai-admin-webui`, a cluster-internal, server-rendered UI that
+coordinates lifecycle operations through those two APIs without receiving
+access to any State Store.
+
 ## 2. Create a provider secret
 
 The default adapter can read only `gwai-anthropic`. Never place provider keys in
@@ -71,6 +75,7 @@ before referencing another Secret.
 ```bash
 kubectl -n gwai port-forward service/gwai-control-plane 8081:8080
 kubectl -n gwai port-forward service/gwai-virtual-key-control-plane 8082:8080
+kubectl -n gwai port-forward service/gwai-admin-webui 28087:8080
 kubectl -n gwai port-forward service/gwai-openai-gateway 8080:8080
 # alternatives: gwai-openai-responses-gateway, gwai-anthropic-gateway,
 #               gwai-gemini-gateway
@@ -82,6 +87,33 @@ Load the generated admin token without printing it:
 GWAI_ADMIN_TOKEN=$(kubectl -n gwai get secret gwai-admin \
   -o jsonpath='{.data.admin-token}' | base64 -d)
 ```
+
+When `admin.existingSecret` is managed externally, rotating its value does not
+hot-reload environment variables. Restart all consumers immediately after the
+Secret update:
+
+```bash
+kubectl -n gwai rollout restart deployment/gwai-control-plane \
+  deployment/gwai-virtual-key-control-plane deployment/gwai-admin-webui
+kubectl -n gwai rollout status deployment \
+  --selector app.kubernetes.io/instance=gwai --timeout=180s
+```
+
+For the browser workflow, open `http://127.0.0.1:28087`, enter that token in
+the login form, and then manage users, providers and virtual keys from the
+dashboard. The token is checked by the Go backend and is not stored in browser
+storage or forwarded to client-side JavaScript. The resulting session cookie is
+HTTP-only and mutations require CSRF protection. A newly created virtual key is
+shown directly in the no-store creation response and is not retained by the
+WebUI; copy it before leaving that page. Edit, status and delete confirmations
+use ETags to reject stale actions. If the UI reports an unknown key-creation
+outcome, inspect the key list and delete any matching key before deliberately
+creating a replacement.
+
+Plain HTTP is acceptable only for this loopback port-forward. Keep the Service
+cluster-internal and terminate TLS before exposing the WebUI on a network. Set
+`adminWebUI.secureCookies=true` for that HTTPS deployment so the session cookie
+also receives the `Secure` flag and the service emits HSTS.
 
 ## 4. Provision a provider and client key
 
@@ -138,11 +170,14 @@ Anthropic and Gemini are listed in
 
 ## 6. Deterministic smoke test
 
-`make e2e-k3s` provisions temporary resources and a fake Anthropic provider,
-sends all four public client protocols through that one adapter, verifies user
+`make e2e-k3s` verifies the WebUI login/session/CSRF boundary, filters, complete
+lifecycle forms, confirmation pages, single-use key creation and degraded
+views. It provisions temporary resources and a fake Anthropic provider, sends
+all four public client protocols through that one adapter, verifies user
 revocation, exercises both admin services independently, scales both control
 planes to zero, restarts the adapter, and cleans up. It never requires a real
-provider key.
+provider key and does not print either the admin token or a one-time virtual
+key.
 
 This pre-release schema does not migrate the earlier single-store registry or
 IR payloads. Use a fresh 0.x installation, or deliberately reset the persistent

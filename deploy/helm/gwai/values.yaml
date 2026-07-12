@@ -12,6 +12,8 @@ images:
     repository: gwai-control-plane
   virtualKeyControlPlane:
     repository: gwai-virtual-key-control-plane
+  adminWebUI:
+    repository: gwai-admin-webui
 
 serviceAccount:
   create: true
@@ -78,6 +80,32 @@ virtualKeyControlPlane:
     limits:
       cpu: 500m
       memory: 256Mi
+
+adminWebUI:
+  # Opaque sessions are process-local, so the initial administrative service
+  # is intentionally constrained to one replica and sessions end on restart.
+  replicas: 1
+  port: 8080
+  maxBodyBytes: 1048576
+  # Integer seconds keep Helm validation deterministic; the Deployment renders
+  # the Go duration consumed by the service (for example, 28800s = 8 hours).
+  sessionTTLSeconds: 28800
+  requestTimeoutSeconds: 20
+  # Must exceed requestTimeoutSeconds plus the server's shutdown margin.
+  terminationGracePeriodSeconds: 40
+  # Keep false for the documented local port-forward workflow. Enable only
+  # when the UI is exposed through HTTPS.
+  secureCookies: false
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
 
 # Gateways expose independent client protocols. They share only the versioned
 # IR dispatcher and can target every registered provider adapter.

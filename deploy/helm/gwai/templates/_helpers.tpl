@@ -58,6 +58,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "gwai.boundedName" (dict "name" (printf "%s-virtual-key-control-plane" (include "gwai.fullname" .))) }}
 {{- end }}
 
+{{- define "gwai.adminWebUIName" -}}
+{{- include "gwai.boundedName" (dict "name" (printf "%s-admin-webui" (include "gwai.fullname" .))) }}
+{{- end }}
+
 {{- define "gwai.adapterName" -}}
 {{- include "gwai.boundedName" (dict "name" (printf "%s-%s-%s" (include "gwai.fullname" .root) .adapter.kind .adapter.name)) }}
 {{- end }}

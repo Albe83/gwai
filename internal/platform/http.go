@@ -164,6 +164,16 @@ func NewLogger(service string) *slog.Logger {
 }
 
 func Serve(ctx context.Context, logger *slog.Logger, server *http.Server) error {
+	return ServeWithShutdownTimeout(ctx, logger, server, 15*time.Second)
+}
+
+// ServeWithShutdownTimeout runs an HTTP server and lets in-flight requests
+// finish for the supplied interval after SIGINT, SIGTERM, or parent-context
+// cancellation.
+func ServeWithShutdownTimeout(ctx context.Context, logger *slog.Logger, server *http.Server, shutdownTimeout time.Duration) error {
+	if shutdownTimeout <= 0 {
+		return errors.New("HTTP shutdown timeout must be positive")
+	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -180,7 +190,7 @@ func Serve(ctx context.Context, logger *slog.Logger, server *http.Server) error 
 		}
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shut down http server: %w", err)

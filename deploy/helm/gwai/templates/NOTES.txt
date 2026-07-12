@@ -4,6 +4,7 @@ Read the generated control-plane admin token:
   kubectl -n {{ .Release.Namespace }} get secret {{ include "gwai.adminSecretName" . }} -o jsonpath='{.data.{{ .Values.admin.secretKey }}}' | base64 -d
 
 Reach the APIs locally:
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.adminWebUIName" . }} 28087:{{ .Values.adminWebUI.service.port }}
   kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.controlPlaneName" . }} 8081:{{ .Values.controlPlane.port }}
   kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.virtualKeyControlPlaneName" . }} 8082:{{ .Values.virtualKeyControlPlane.port }}
 {{ range $gateway := .Values.gateways }}
@@ -12,3 +13,12 @@ Reach the APIs locally:
 
 Provider API keys are not Helm values. Create a Kubernetes Secret and reference
 its name/key when creating the provider in the control-plane API.
+
+The administrative UI is available at http://127.0.0.1:28087 after its
+port-forward starts. It authenticates with the generated admin token above.
+{{- if .Values.admin.existingSecret }}
+
+After rotating external Secret {{ .Values.admin.existingSecret | quote }},
+restart the control-plane, virtual-key-control-plane and admin-webui
+Deployments so their token environment variables refresh.
+{{- end }}
