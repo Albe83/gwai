@@ -99,6 +99,22 @@ adminWebUI:
   service:
     type: ClusterIP
     port: 8080
+  # Optionally attach the cluster-internal Service to an existing Gateway API
+  # Gateway. The chart deliberately does not create the Gateway or TLS
+  # certificate. Enabling this requires secureCookies=true and an HTTPS
+  # listener selected by parentRefs.
+  httpRoute:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    # Example:
+    # parentRefs:
+    #   - name: edge-gateway
+    #     namespace: gateway-system
+    #     sectionName: https
+    # Keep the administrative endpoint host-scoped even when the selected
+    # Gateway listener also constrains hostnames.
+    hostnames: []
   resources:
     requests:
       cpu: 25m

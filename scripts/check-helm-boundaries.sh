@@ -5,7 +5,8 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 HELM_BIN=${HELM:-helm}
 render=$(mktemp)
 long_render=$(mktemp)
-trap 'rm -f "$render" "$long_render"' EXIT
+route_render=$(mktemp)
+trap 'rm -f "$render" "$long_render" "$route_render"' EXIT
 
 "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" >"$render"
 
@@ -29,6 +30,12 @@ configuration_doc() {
   awk -v name="$name" 'BEGIN { RS="---" } $0 ~ "kind: Configuration" && $0 ~ "name: " name "([[:space:]]|$)" { print }' "$render"
 }
 
+httproute_doc() {
+  local name=$1
+  local source=${2:-$render}
+  awk -v name="$name" 'BEGIN { RS="---" } $0 ~ "kind: HTTPRoute" && $0 ~ "name: " name "([[:space:]]|$)" { print }' "$source"
+}
+
 policy_doc() {
   local configuration=$1
   local app_id=$2
@@ -42,6 +49,7 @@ policy_doc() {
 }
 
 [[ $(awk '$1 == "kind:" && $2 == "Component" { count++ } END { print count+0 }' "$render") -eq 3 ]]
+[[ $(awk '$1 == "kind:" && $2 == "HTTPRoute" { count++ } END { print count+0 }' "$render") -eq 0 ]]
 
 control=$(component_doc gwai-control-state)
 providers=$(component_doc gwai-provider-state)
@@ -113,6 +121,32 @@ grep -q 'DAPR_API_TOKEN' <<<"$admin_webui"
 
 admin_service=$(service_doc gwai-admin-webui)
 grep -q '^  type: ClusterIP$' <<<"$admin_service"
+
+"$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].namespace=gateway-system' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.hostnames[0]=admin.example.com' \
+  --set-string 'adminWebUI.httpRoute.annotations.test\.gwai\.dev/exposure=https' \
+  >"$route_render"
+[[ $(awk '$1 == "kind:" && $2 == "HTTPRoute" { count++ } END { print count+0 }' "$route_render") -eq 1 ]]
+admin_route=$(httproute_doc gwai-admin-webui "$route_render")
+grep -q '^apiVersion: gateway.networking.k8s.io/v1$' <<<"$admin_route"
+grep -q '^kind: HTTPRoute$' <<<"$admin_route"
+grep -q '"test.gwai.dev/exposure": "https"' <<<"$admin_route"
+grep -q '^    - group: gateway.networking.k8s.io$' <<<"$admin_route"
+grep -q '^      kind: Gateway$' <<<"$admin_route"
+grep -q '^      name: "edge-gateway"$' <<<"$admin_route"
+grep -q '^      namespace: "gateway-system"$' <<<"$admin_route"
+grep -q '^      sectionName: "https"$' <<<"$admin_route"
+grep -q '^    - "admin.example.com"$' <<<"$admin_route"
+grep -q '^            type: PathPrefix$' <<<"$admin_route"
+grep -q '^            value: /$' <<<"$admin_route"
+grep -q '^          kind: Service$' <<<"$admin_route"
+grep -q '^          name: gwai-admin-webui$' <<<"$admin_route"
+grep -q '^          port: 8080$' <<<"$admin_route"
 
 # A custom retry policy must not turn domain 409 responses from subject fencing
 # into long retries and an upstream timeout.
@@ -210,6 +244,118 @@ fi
 if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
   --set-string 'adminWebUI.service.type=LoadBalancer' >/dev/null 2>&1; then
   echo "externally exposed admin WebUI service was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' >/dev/null 2>&1; then
+  echo "HTTPRoute without secure WebUI cookies was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' >/dev/null 2>&1; then
+  echo "HTTPRoute without a parent Gateway was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=' >/dev/null 2>&1; then
+  echo "HTTPRoute with an empty parent Gateway name was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.hostnames[0]=admin.example.com' >/dev/null 2>&1; then
+  echo "HTTPRoute without an explicit HTTPS listener section was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].sectionName=https' >/dev/null 2>&1; then
+  echo "HTTPRoute without an explicit hostname was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.hostnames[0]=admin.example.com' \
+  --set 'adminWebUI.httpRoute.parentRefs[0].port=443' >/dev/null 2>&1; then
+  echo "HTTPRoute with unsupported port-based listener selection was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.hostnames[0]=' >/dev/null 2>&1; then
+  echo "HTTPRoute with an empty hostname was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.hostnames[0]=admin.example.com:443' >/dev/null 2>&1; then
+  echo "HTTPRoute with an invalid hostname was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[1].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[1].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.hostnames[0]=admin.example.com' >/dev/null 2>&1; then
+  echo "HTTPRoute with a duplicate parent Gateway listener was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.hostnames[0]=admin.example.com' \
+  --set-string 'adminWebUI.httpRoute.hostnames[1]=admin.example.com' >/dev/null 2>&1; then
+  echo "HTTPRoute with a duplicate hostname was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[32].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[32].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.hostnames[0]=admin.example.com' >/dev/null 2>&1; then
+  echo "HTTPRoute with more than 32 parent Gateways was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.hostnames[16]=admin.example.com' >/dev/null 2>&1; then
+  echo "HTTPRoute with more than 16 hostnames was accepted" >&2
+  exit 1
+fi
+if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
+  --set 'adminWebUI.httpRoute.enabled=true' \
+  --set 'adminWebUI.secureCookies=true' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].name=edge-gateway' \
+  --set-string 'adminWebUI.httpRoute.parentRefs[0].sectionName=https' \
+  --set-string 'adminWebUI.httpRoute.hostnames[0]=admin.example.com' \
+  --set 'adminWebUI.httpRoute.annotations.example=1' >/dev/null 2>&1; then
+  echo "HTTPRoute with a non-string annotation value was accepted" >&2
   exit 1
 fi
 if "$HELM_BIN" template gwai "$ROOT_DIR/deploy/helm/gwai" \
