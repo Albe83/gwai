@@ -28,6 +28,16 @@ app.kubernetes.io/name: {{ include "gwai.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{/* Keep long generated names unique instead of truncating distinct suffixes. */}}
+{{- define "gwai.boundedName" -}}
+{{- $raw := .name -}}
+{{- if gt (len $raw) 63 -}}
+{{- printf "%s-%s" (trunc 54 $raw | trimSuffix "-") (trunc 8 (sha256sum $raw)) -}}
+{{- else -}}
+{{- $raw -}}
+{{- end -}}
+{{- end }}
+
 {{- define "gwai.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
 {{- include "gwai.fullname" . }}
@@ -37,19 +47,35 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "gwai.gatewayName" -}}
-{{- printf "%s-%s" (include "gwai.fullname" .root) .gateway.name | trunc 63 | trimSuffix "-" }}
+{{- include "gwai.boundedName" (dict "name" (printf "%s-%s" (include "gwai.fullname" .root) .gateway.name)) }}
+{{- end }}
+
+{{- define "gwai.controlPlaneName" -}}
+{{- include "gwai.boundedName" (dict "name" (printf "%s-control-plane" (include "gwai.fullname" .))) }}
+{{- end }}
+
+{{- define "gwai.virtualKeyControlPlaneName" -}}
+{{- include "gwai.boundedName" (dict "name" (printf "%s-virtual-key-control-plane" (include "gwai.fullname" .))) }}
 {{- end }}
 
 {{- define "gwai.adapterName" -}}
-{{- printf "%s-%s-%s" (include "gwai.fullname" .root) .adapter.kind .adapter.name | trunc 63 | trimSuffix "-" }}
+{{- include "gwai.boundedName" (dict "name" (printf "%s-%s-%s" (include "gwai.fullname" .root) .adapter.kind .adapter.name)) }}
 {{- end }}
 
 {{- define "gwai.adapterServiceAccountName" -}}
-{{- printf "%s-sa" (include "gwai.adapterName" .) | trunc 63 | trimSuffix "-" }}
+{{- include "gwai.boundedName" (dict "name" (printf "%s-sa" (include "gwai.adapterName" .))) }}
 {{- end }}
 
 {{- define "gwai.adapterSecretsRoleName" -}}
-{{- printf "%s-secrets" (include "gwai.adapterName" .) | trunc 63 | trimSuffix "-" }}
+{{- include "gwai.boundedName" (dict "name" (printf "%s-secrets" (include "gwai.adapterName" .))) }}
+{{- end }}
+
+{{- define "gwai.valkeyName" -}}
+{{- include "gwai.boundedName" (dict "name" (printf "%s-valkey" (include "gwai.fullname" .))) }}
+{{- end }}
+
+{{- define "gwai.resiliencyName" -}}
+{{- include "gwai.boundedName" (dict "name" (printf "%s-service-invocation" (include "gwai.fullname" .))) }}
 {{- end }}
 
 {{- define "gwai.image" -}}
@@ -67,7 +93,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.admin.existingSecret -}}
 {{ .Values.admin.existingSecret }}
 {{- else -}}
-{{ include "gwai.fullname" . }}-admin
+{{ include "gwai.boundedName" (dict "name" (printf "%s-admin" (include "gwai.fullname" .))) }}
 {{- end -}}
 {{- end }}
 
@@ -75,7 +101,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.security.daprAPI.existingSecret -}}
 {{ .Values.security.daprAPI.existingSecret }}
 {{- else -}}
-{{ include "gwai.fullname" . }}-dapr-api-token
+{{ include "gwai.boundedName" (dict "name" (printf "%s-dapr-api-token" (include "gwai.fullname" .))) }}
 {{- end -}}
 {{- end }}
 
@@ -83,13 +109,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.security.appAPI.existingSecret -}}
 {{ .Values.security.appAPI.existingSecret }}
 {{- else -}}
-{{ include "gwai.fullname" . }}-app-api-token
+{{ include "gwai.boundedName" (dict "name" (printf "%s-app-api-token" (include "gwai.fullname" .))) }}
+{{- end -}}
+{{- end }}
+
+{{- define "gwai.virtualKeyAppAPISecretName" -}}
+{{- if .Values.security.virtualKeyAppAPI.existingSecret -}}
+{{ .Values.security.virtualKeyAppAPI.existingSecret }}
+{{- else -}}
+{{ include "gwai.boundedName" (dict "name" (printf "%s-virtual-key-app-api-token" (include "gwai.fullname" .))) }}
 {{- end -}}
 {{- end }}
 
 {{- define "gwai.valkeyHost" -}}
 {{- if .Values.valkey.enabled -}}
-{{ include "gwai.fullname" . }}-valkey:{{ .Values.valkey.port }}
+{{ include "gwai.valkeyName" . }}:{{ .Values.valkey.port }}
 {{- else -}}
 {{ required "valkey.host is required when valkey.enabled=false" .Values.valkey.host }}:{{ .Values.valkey.port }}
 {{- end -}}
@@ -99,6 +133,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.valkey.auth.existingSecret -}}
 {{ .Values.valkey.auth.existingSecret }}
 {{- else -}}
-{{ include "gwai.fullname" . }}-valkey-auth
+{{ include "gwai.boundedName" (dict "name" (printf "%s-valkey-auth" (include "gwai.fullname" .))) }}
 {{- end -}}
 {{- end }}

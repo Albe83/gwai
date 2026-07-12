@@ -2,7 +2,7 @@
 apiVersion: dapr.io/v1alpha1
 kind: Resiliency
 metadata:
-  name: {{ include "gwai.fullname" . }}-service-invocation
+  name: {{ include "gwai.resiliencyName" . }}
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
 scopes:

@@ -2,12 +2,12 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "gwai.fullname" . }}-valkey
+  name: {{ include "gwai.valkeyName" . }}
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
     app.kubernetes.io/component: valkey
 spec:
-  serviceName: {{ include "gwai.fullname" . }}-valkey
+  serviceName: {{ include "gwai.valkeyName" . }}
   replicas: 1
   selector:
     matchLabels:
@@ -40,6 +40,8 @@ spec:
             - --save
             - "60"
             - "1"
+            - --databases
+            - {{ .Values.valkey.databases | quote }}
             - --requirepass
             - $(VALKEY_PASSWORD)
           env:
@@ -87,7 +89,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "gwai.fullname" . }}-valkey
+  name: {{ include "gwai.valkeyName" . }}
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
     app.kubernetes.io/component: valkey

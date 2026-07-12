@@ -56,8 +56,8 @@ spec:
           env:
             - name: PORT
               value: {{ $adapter.port | quote }}
-            - name: GWAI_STATE_STORE
-              value: {{ $root.Values.dapr.stateStoreName | quote }}
+            - name: GWAI_PROVIDER_STATE_STORE
+              value: {{ $root.Values.dapr.stateStores.providers.name | quote }}
             - name: GWAI_PROVIDER_SLUG
               value: {{ $adapter.providerSlug | quote }}
             - name: GWAI_ADAPTER_APP_ID

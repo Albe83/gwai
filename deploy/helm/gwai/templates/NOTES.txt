@@ -4,7 +4,8 @@ Read the generated control-plane admin token:
   kubectl -n {{ .Release.Namespace }} get secret {{ include "gwai.adminSecretName" . }} -o jsonpath='{.data.{{ .Values.admin.secretKey }}}' | base64 -d
 
 Reach the APIs locally:
-  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.fullname" . }}-control-plane 8081:{{ .Values.controlPlane.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.controlPlaneName" . }} 8081:{{ .Values.controlPlane.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "gwai.virtualKeyControlPlaneName" . }} 8082:{{ .Values.virtualKeyControlPlane.port }}
 {{ range $gateway := .Values.gateways }}
   kubectl -n {{ $.Release.Namespace }} port-forward service/{{ include "gwai.gatewayName" (dict "root" $ "gateway" $gateway) }} 8080:{{ $gateway.service.port }}
 {{ end }}

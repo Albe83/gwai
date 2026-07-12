@@ -40,6 +40,19 @@ and `appID` must be unique. Select the image matching `kind`:
 Optional `defaultMaxOutputTokens` and `maxOutputTokens` values are passed to
 adapters that enforce local token policy.
 
+The chart also deploys separate resource and virtual-key control planes. Their
+state is divided into three Dapr components backed by Valkey logical databases:
+
+```yaml
+dapr:
+  stateStores:
+    controlPlane: {name: gwai-control-state, redisDB: 0}
+    providers: {name: gwai-provider-state, redisDB: 1}
+    virtualKeys: {name: gwai-virtual-key-state, redisDB: 2}
+valkey:
+  databases: 16 # bundled server; every redisDB must be below this value
+```
+
 ## 2. Create a provider secret
 
 The default adapter can read only `gwai-anthropic`. Never place provider keys in
@@ -57,6 +70,7 @@ before referencing another Secret.
 
 ```bash
 kubectl -n gwai port-forward service/gwai-control-plane 8081:8080
+kubectl -n gwai port-forward service/gwai-virtual-key-control-plane 8082:8080
 kubectl -n gwai port-forward service/gwai-openai-gateway 8080:8080
 # alternatives: gwai-openai-responses-gateway, gwai-anthropic-gateway,
 #               gwai-gemini-gateway
@@ -88,16 +102,19 @@ curl -fsS http://127.0.0.1:8081/v1/providers \
     "secret_ref":{"store":"kubernetes","name":"gwai-anthropic","key":"api-key"}
   }' | jq
 
-GWAI_API_KEY=$(curl -fsS http://127.0.0.1:8081/v1/virtual-keys \
+GWAI_API_KEY=$(curl -fsS http://127.0.0.1:8082/v1/virtual-keys \
   -H "Authorization: Bearer $GWAI_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "{\"name\":\"local\",\"user_id\":\"$USER_ID\",\"allowed_models\":[\"anthropic/claude-sonnet-4-6\"]}" \
   | jq -r .key)
 ```
 
-The virtual key is returned once. To configure another provider, use the same
-`providerSlug`, `kind` and `appID` as its Helm entry. Omitted endpoints and API
-versions receive the defaults in [the control-plane API](control-plane-api.md).
+The virtual key is returned once. The resource control plane synchronizes a
+minimal revisioned user subject to the virtual-key service; gateway
+authorization fails closed if that projection is absent, disabled or deleted.
+To configure another provider, use the same `providerSlug`, `kind` and `appID`
+as its Helm entry. Omitted endpoints and API versions receive the defaults in
+[the control-plane API](control-plane-api.md).
 
 ## 5. Call any gateway
 
@@ -122,9 +139,12 @@ Anthropic and Gemini are listed in
 ## 6. Deterministic smoke test
 
 `make e2e-k3s` provisions temporary resources and a fake Anthropic provider,
-sends all four public client protocols through that one adapter, scales the
-control plane to zero, restarts the adapter, and cleans up. It never requires a
-real provider key.
+sends all four public client protocols through that one adapter, verifies user
+revocation, exercises both admin services independently, scales both control
+planes to zero, restarts the adapter, and cleans up. It never requires a real
+provider key.
 
-This pre-release schema does not migrate earlier provider records, virtual keys
-or IR payloads; recreate them after upgrading.
+This pre-release schema does not migrate the earlier single-store registry or
+IR payloads. Use a fresh 0.x installation, or deliberately reset the persistent
+state and recreate users, providers and virtual keys after upgrading. Merely
+reusing a volume containing `gwai-state` is not a migration.

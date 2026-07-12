@@ -32,4 +32,4 @@ invocation and IR `2026-07-12` are the only runtime boundary between them.
 - Shared wire DTOs for the same public/provider protocol are allowed, but
   gateway and adapter translation functions remain independent.
 - Integration tests must exercise unlike gateway/adapter pairs and route
-  operation while the control plane is unavailable.
+  operation while both control-plane services are unavailable.

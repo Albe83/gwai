@@ -3,7 +3,7 @@
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
-  name: {{ include "gwai.fullname" . }}-control-plane
+  name: {{ include "gwai.controlPlaneName" . }}
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
 spec:
@@ -11,12 +11,48 @@ spec:
     samplingRate: {{ .Values.dapr.tracingSamplingRate | quote }}
   api:
     allowed:
+      - name: invoke
+        version: v1.0
+        protocol: http
       - name: state
         version: v1.0
         protocol: http
   accessControl:
     defaultAction: deny
     trustDomain: public
+---
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: {{ include "gwai.virtualKeyControlPlaneName" . }}
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+spec:
+  tracing:
+    samplingRate: {{ .Values.dapr.tracingSamplingRate | quote }}
+  api:
+    allowed:
+      - name: invoke
+        version: v1.0
+        protocol: http
+      - name: state
+        version: v1.0
+        protocol: http
+  accessControl:
+    defaultAction: deny
+    trustDomain: public
+    policies:
+      - appId: {{ include "gwai.controlPlaneName" . }}
+        namespace: {{ .Release.Namespace }}
+        trustDomain: public
+        defaultAction: deny
+        operations:
+          - name: /internal/v1/subjects/sync
+            httpVerb: ["POST"]
+            action: allow
+          - name: /internal/v1/subjects/fence
+            httpVerb: ["POST"]
+            action: allow
 {{- range $adapter := .Values.providerAdapters }}
 ---
 apiVersion: dapr.io/v1alpha1

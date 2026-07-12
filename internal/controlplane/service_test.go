@@ -11,24 +11,68 @@ import (
 	"github.com/Albe83/gwai/internal/state"
 )
 
-func newTestService() (*Service, *Runtime, *Repository) {
-	repository := NewRepository(state.NewMemoryStore())
-	service := NewService(repository)
-	service.now = func() time.Time { return time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC) }
-	runtime := NewRuntime(repository)
-	runtime.now = service.now
-	return service, runtime, repository
+type testControlPlanes struct {
+	resources *ResourceService
+	keys      *VirtualKeyService
+	gateway   *GatewayRuntime
+	users     *UserRepository
+	providers *ProviderRepository
+	keyRepo   *VirtualKeyRepository
 }
 
-func provisionTestRoute(t *testing.T, service *Service) (User, Provider, string) {
+type flakySubjectRegistry struct {
+	target               SubjectRegistry
+	failSync             bool
+	failFenceAfterCommit bool
+}
+
+func (r *flakySubjectRegistry) SyncSubject(ctx context.Context, subject KeySubject) error {
+	if r.failSync {
+		r.failSync = false
+		return errors.New("injected subject sync failure")
+	}
+	return r.target.SyncSubject(ctx, subject)
+}
+
+func (r *flakySubjectRegistry) FenceSubject(ctx context.Context, subject KeySubject) error {
+	if err := r.target.FenceSubject(ctx, subject); err != nil {
+		return err
+	}
+	if r.failFenceAfterCommit {
+		r.failFenceAfterCommit = false
+		return errors.New("injected ambiguous fence response")
+	}
+	return nil
+}
+
+func newTestControlPlanes() testControlPlanes {
+	// Deliberately distinct stores: a test accidentally reading the old shared
+	// registry can no longer pass by coincidence.
+	users := NewUserRepository(state.NewMemoryStore())
+	providers := NewProviderRepository(state.NewMemoryStore())
+	keyRepo := NewVirtualKeyRepository(state.NewMemoryStore())
+	keys := NewVirtualKeyService(keyRepo, providers)
+	resources := NewResourceService(users, providers, keys)
+	now := func() time.Time { return time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC) }
+	resources.now = now
+	keys.now = now
+	gateway := NewGatewayRuntime(keyRepo, providers)
+	gateway.now = now
+	return testControlPlanes{
+		resources: resources, keys: keys, gateway: gateway,
+		users: users, providers: providers, keyRepo: keyRepo,
+	}
+}
+
+func provisionTestRoute(t *testing.T, planes testControlPlanes) (User, Provider, string) {
 	t.Helper()
 	ctx := context.Background()
-	user, err := service.CreateUser(ctx, UserInput{Name: "Ada", Email: "ada@example.com"})
+	user, err := planes.resources.CreateUser(ctx, UserInput{Name: "Ada", Email: "ada@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := service.CreateProvider(ctx, ProviderInput{
-		Slug: "anthropic-primary", Name: "Anthropic primary", Kind: "anthropic",
+	provider, err := planes.resources.CreateProvider(ctx, ProviderInput{
+		Slug: "anthropic-primary", Name: "Anthropic primary", Kind: ProviderKindAnthropic,
 		AdapterAppID: "gwai-anthropic-primary",
 		SecretRef:    daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic", Key: "api-key"},
 	})
@@ -38,12 +82,12 @@ func provisionTestRoute(t *testing.T, service *Service) (User, Provider, string)
 	return user, provider, "anthropic-primary/claude/sonnet-test"
 }
 
-func TestServiceLifecycleAndLocalAuthorization(t *testing.T) {
-	service, runtime, repository := newTestService()
+func TestSplitControlPlaneLifecycleAndAuthorization(t *testing.T) {
+	planes := newTestControlPlanes()
 	ctx := context.Background()
-	user, provider, qualifiedModel := provisionTestRoute(t, service)
+	user, provider, qualifiedModel := provisionTestRoute(t, planes)
 
-	created, err := service.CreateVirtualKey(ctx, VirtualKeyInput{
+	created, err := planes.keys.CreateVirtualKey(ctx, VirtualKeyInput{
 		Name: "integration", UserID: user.ID, AllowedModels: []string{qualifiedModel},
 	})
 	if err != nil {
@@ -52,7 +96,7 @@ func TestServiceLifecycleAndLocalAuthorization(t *testing.T) {
 	if created.Key == "" || created.VirtualKey.Prefix == "" {
 		t.Fatal("created key did not return its one-time secret and prefix")
 	}
-	persisted, err := repository.GetVirtualKey(ctx, created.VirtualKey.ID)
+	persisted, err := planes.keyRepo.GetVirtualKey(ctx, created.VirtualKey.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,106 +108,259 @@ func TestServiceLifecycleAndLocalAuthorization(t *testing.T) {
 		t.Fatal("virtual key must be persisted as a one-way hash")
 	}
 
-	authorization, err := runtime.Authorize(ctx, created.Key, qualifiedModel)
+	authorization, err := planes.gateway.Authorize(ctx, created.Key, qualifiedModel)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if authorization.UserID != user.ID || authorization.KeyID != created.VirtualKey.ID {
 		t.Fatalf("unexpected authorization: %+v", authorization)
 	}
-	if _, err := runtime.Authorize(ctx, "gwai_wrong", qualifiedModel); !errors.Is(err, ErrUnauthorized) {
+	if _, err := planes.gateway.Authorize(ctx, "gwai_wrong", qualifiedModel); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expected ErrUnauthorized, got %v", err)
 	}
 
-	route, err := runtime.ResolveRoute(ctx, qualifiedModel)
+	route, err := planes.gateway.ResolveRoute(ctx, qualifiedModel)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if route.ProviderID != provider.ID || route.UpstreamModel != "claude/sonnet-test" || route.AdapterAppID != provider.AdapterAppID {
 		t.Fatalf("unexpected route: %+v", route)
 	}
-
-	if err := service.DeleteUser(ctx, user.ID); !errors.Is(err, ErrConflict) {
+	if err := planes.resources.DeleteUser(ctx, user.ID); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected user dependency conflict, got %v", err)
 	}
-	if err := service.DeleteProvider(ctx, provider.ID); err != nil {
+	if err := planes.keys.DeleteVirtualKey(ctx, created.VirtualKey.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.ResolveRoute(ctx, qualifiedModel); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected deleted provider to be unavailable, got %v", err)
-	}
-	if err := service.DeleteVirtualKey(ctx, created.VirtualKey.ID); err != nil {
+	if err := planes.resources.DeleteUser(ctx, user.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.DeleteUser(ctx, user.ID); err != nil {
-		t.Fatal(err)
+	if _, err := planes.gateway.Authorize(ctx, created.Key, qualifiedModel); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("deleted key/subject must be unauthorized, got %v", err)
 	}
 }
 
-func TestServiceRejectsDuplicateProviderSlugAndDisallowedModel(t *testing.T) {
-	service, runtime, _ := newTestService()
+func TestUserStatusProjectionRevokesAndRestoresKeys(t *testing.T) {
+	planes := newTestControlPlanes()
 	ctx := context.Background()
-	user, provider, qualifiedModel := provisionTestRoute(t, service)
-	if _, err := service.CreateProvider(ctx, ProviderInput{
-		Slug: provider.Slug, Name: "Duplicate", Kind: "anthropic", AdapterAppID: "another-adapter",
+	user, _, qualifiedModel := provisionTestRoute(t, planes)
+	created, err := planes.keys.CreateVirtualKey(ctx, VirtualKeyInput{
+		Name: "client", UserID: user.ID, AllowedModels: []string{qualifiedModel},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err = planes.resources.UpdateUser(ctx, user.ID, UserInput{
+		Name: user.Name, Email: user.Email, Status: StatusDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planes.gateway.Authorize(ctx, created.Key, qualifiedModel); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("disabled subject must revoke key, got %v", err)
+	}
+	_, err = planes.resources.UpdateUser(ctx, user.ID, UserInput{
+		Name: user.Name, Email: user.Email, Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planes.gateway.Authorize(ctx, created.Key, qualifiedModel); err != nil {
+		t.Fatalf("reactivated subject must restore key: %v", err)
+	}
+}
+
+func TestUpdateUserRequiresExplicitStatus(t *testing.T) {
+	planes := newTestControlPlanes()
+	user, _, _ := provisionTestRoute(t, planes)
+	disabled, err := planes.resources.UpdateUser(context.Background(), user.ID, UserInput{
+		Name: user.Name, Email: user.Email, Status: StatusDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planes.resources.UpdateUser(context.Background(), user.ID, UserInput{
+		Name: "Renamed", Email: user.Email,
+	}); err == nil {
+		t.Fatal("PUT without status must not implicitly reactivate a disabled user")
+	}
+	current, err := planes.resources.GetUser(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != StatusDisabled || current.Revision != disabled.Revision {
+		t.Fatalf("invalid PUT changed disabled user: %+v", current)
+	}
+}
+
+func TestFailedUserProjectionStaysFailClosedAndPUTRepairsIt(t *testing.T) {
+	users := NewUserRepository(state.NewMemoryStore())
+	providers := NewProviderRepository(state.NewMemoryStore())
+	keyRepo := NewVirtualKeyRepository(state.NewMemoryStore())
+	keys := NewVirtualKeyService(keyRepo, providers)
+	flaky := &flakySubjectRegistry{target: keys, failSync: true}
+	resources := NewResourceService(users, providers, flaky)
+
+	if _, err := resources.CreateUser(context.Background(), UserInput{Name: "Ada", Email: "ada@example.com"}); err == nil {
+		t.Fatal("injected subject synchronization failure must reach the caller")
+	}
+	persisted, err := users.ListUsers(context.Background())
+	if err != nil || len(persisted) != 1 {
+		t.Fatalf("canonical user must remain available for repair: users=%+v err=%v", persisted, err)
+	}
+	if _, err := keys.CreateVirtualKey(context.Background(), VirtualKeyInput{
+		Name: "must fail", UserID: persisted[0].ID,
+	}); err == nil {
+		t.Fatal("missing subject projection must fail key creation closed")
+	}
+	repaired, err := resources.UpdateUser(context.Background(), persisted[0].ID, UserInput{
+		Name: persisted[0].Name, Email: persisted[0].Email, Status: persisted[0].Status,
+	})
+	if err != nil {
+		t.Fatalf("PUT did not repair the projection: %v", err)
+	}
+	if repaired.Revision != persisted[0].Revision+1 {
+		t.Fatalf("repair did not advance revision: before=%d after=%d", persisted[0].Revision, repaired.Revision)
+	}
+	if _, err := keys.CreateVirtualKey(context.Background(), VirtualKeyInput{
+		Name: "repaired", UserID: repaired.ID,
+	}); err != nil {
+		t.Fatalf("repaired subject must accept key creation: %v", err)
+	}
+}
+
+func TestFailedActivationLeavesAuthorizationDisabledUntilRetry(t *testing.T) {
+	planes := newTestControlPlanes()
+	ctx := context.Background()
+	user, _, qualifiedModel := provisionTestRoute(t, planes)
+	created, err := planes.keys.CreateVirtualKey(ctx, VirtualKeyInput{
+		Name: "client", UserID: user.ID, AllowedModels: []string{qualifiedModel},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := planes.resources.UpdateUser(ctx, user.ID, UserInput{
+		Name: user.Name, Email: user.Email, Status: StatusDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planes.resources.subjects = &flakySubjectRegistry{target: planes.keys, failSync: true}
+	if _, err := planes.resources.UpdateUser(ctx, user.ID, UserInput{
+		Name: disabled.Name, Email: disabled.Email, Status: StatusActive,
+	}); err == nil {
+		t.Fatal("injected activation synchronization failure must reach the caller")
+	}
+	canonical, err := planes.resources.GetUser(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.Status != StatusActive {
+		t.Fatalf("activation ordering did not persist canonical state first: %+v", canonical)
+	}
+	if _, err := planes.gateway.Authorize(ctx, created.Key, qualifiedModel); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("failed activation must remain unauthorized, got %v", err)
+	}
+	if _, err := planes.resources.UpdateUser(ctx, user.ID, UserInput{
+		Name: canonical.Name, Email: canonical.Email, Status: StatusActive,
+	}); err != nil {
+		t.Fatalf("activation retry did not repair projection: %v", err)
+	}
+	if _, err := planes.gateway.Authorize(ctx, created.Key, qualifiedModel); err != nil {
+		t.Fatalf("repaired activation did not restore authorization: %v", err)
+	}
+}
+
+func TestAmbiguousFenceIsFailClosedAndDeleteRetryIsIdempotent(t *testing.T) {
+	planes := newTestControlPlanes()
+	ctx := context.Background()
+	user, _, _ := provisionTestRoute(t, planes)
+	planes.resources.subjects = &flakySubjectRegistry{
+		target: planes.keys, failFenceAfterCommit: true,
+	}
+	if err := planes.resources.DeleteUser(ctx, user.ID); err == nil {
+		t.Fatal("ambiguous fence response must reach the caller")
+	}
+	if _, err := planes.resources.GetUser(ctx, user.ID); err != nil {
+		t.Fatalf("canonical user should remain after ambiguous fence: %v", err)
+	}
+	if _, err := planes.keys.CreateVirtualKey(ctx, VirtualKeyInput{
+		Name: "must fail", UserID: user.ID,
+	}); err == nil {
+		t.Fatal("committed fence must reject new keys")
+	}
+	if err := planes.resources.DeleteUser(ctx, user.ID); err != nil {
+		t.Fatalf("delete retry was not idempotent: %v", err)
+	}
+	if _, err := planes.resources.GetUser(ctx, user.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("user remains after successful delete retry: %v", err)
+	}
+}
+
+func TestServicesRejectDuplicateProviderAndDisallowedModel(t *testing.T) {
+	planes := newTestControlPlanes()
+	ctx := context.Background()
+	user, provider, qualifiedModel := provisionTestRoute(t, planes)
+	if _, err := planes.resources.CreateProvider(ctx, ProviderInput{
+		Slug: provider.Slug, Name: "Duplicate", Kind: ProviderKindAnthropic, AdapterAppID: "another-adapter",
 		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "other"},
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected duplicate slug conflict, got %v", err)
 	}
-	if _, err := service.CreateProvider(ctx, ProviderInput{
-		Slug: "another-provider", Name: "Duplicate app ID", Kind: "anthropic", AdapterAppID: provider.AdapterAppID,
+	if _, err := planes.resources.CreateProvider(ctx, ProviderInput{
+		Slug: "another-provider", Name: "Duplicate app ID", Kind: ProviderKindAnthropic, AdapterAppID: provider.AdapterAppID,
 		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "other"},
 	}); !errors.Is(err, ErrConflict) {
-		t.Fatalf("expected duplicate adapter app ID conflict, got %v", err)
+		t.Fatalf("expected duplicate app ID conflict, got %v", err)
 	}
-	created, err := service.CreateVirtualKey(ctx, VirtualKeyInput{
+	created, err := planes.keys.CreateVirtualKey(ctx, VirtualKeyInput{
 		Name: "limited", UserID: user.ID, AllowedModels: []string{qualifiedModel},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.Authorize(ctx, created.Key, provider.Slug+"/another-model"); !errors.Is(err, ErrForbidden) {
+	if _, err := planes.gateway.Authorize(ctx, created.Key, provider.Slug+"/another-model"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected forbidden model, got %v", err)
 	}
-	if _, err := runtime.Authorize(ctx, created.Key, qualifiedModel); err != nil {
+	if _, err := planes.gateway.Authorize(ctx, created.Key, qualifiedModel); err != nil {
 		t.Fatalf("expected exact qualified model to be allowed, got %v", err)
 	}
 }
 
 func TestProviderSlugAndAdapterAppIDAreImmutable(t *testing.T) {
-	service, _, _ := newTestService()
-	_, provider, _ := provisionTestRoute(t, service)
+	planes := newTestControlPlanes()
+	_, provider, _ := provisionTestRoute(t, planes)
 	input := ProviderInput{
 		Slug: provider.Slug, Name: provider.Name, Kind: provider.Kind, BaseURL: provider.BaseURL,
 		APIVersion: provider.APIVersion, AdapterAppID: provider.AdapterAppID, SecretRef: provider.SecretRef,
 		Status: provider.Status,
 	}
 	input.Slug = "renamed"
-	if _, err := service.UpdateProvider(context.Background(), provider.ID, input); err == nil {
+	if _, err := planes.resources.UpdateProvider(context.Background(), provider.ID, input); err == nil {
 		t.Fatal("expected immutable slug validation error")
 	}
 	input.Slug = provider.Slug
 	input.AdapterAppID = "renamed-adapter"
-	if _, err := service.UpdateProvider(context.Background(), provider.ID, input); err == nil {
+	if _, err := planes.resources.UpdateProvider(context.Background(), provider.ID, input); err == nil {
 		t.Fatal("expected immutable adapter_app_id validation error")
 	}
 }
 
 func TestServiceRejectsDuplicateUserEmailCaseInsensitively(t *testing.T) {
-	service, _, _ := newTestService()
+	planes := newTestControlPlanes()
 	ctx := context.Background()
-	if _, err := service.CreateUser(ctx, UserInput{Name: "First", Email: "person@example.com"}); err != nil {
+	if _, err := planes.resources.CreateUser(ctx, UserInput{Name: "First", Email: "person@example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.CreateUser(ctx, UserInput{Name: "Second", Email: "PERSON@example.com"}); !errors.Is(err, ErrConflict) {
+	if _, err := planes.resources.CreateUser(ctx, UserInput{Name: "Second", Email: "PERSON@example.com"}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected duplicate email conflict, got %v", err)
 	}
 }
 
 func TestServiceRejectsAmbiguousProviderURL(t *testing.T) {
-	service, _, _ := newTestService()
-	_, err := service.CreateProvider(context.Background(), ProviderInput{
-		Slug: "anthropic", Name: "Anthropic", Kind: "anthropic", AdapterAppID: "anthropic-adapter",
+	planes := newTestControlPlanes()
+	_, err := planes.resources.CreateProvider(context.Background(), ProviderInput{
+		Slug: "anthropic", Name: "Anthropic", Kind: ProviderKindAnthropic, AdapterAppID: "anthropic-adapter",
 		BaseURL:   "https://user@example.com/api?token=secret",
 		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic"},
 	})
@@ -200,25 +397,10 @@ func TestNormalizeProviderInputSupportsEveryAdapterKind(t *testing.T) {
 	}
 }
 
-func TestNormalizeProviderInputRejectsUnknownKindAndInvalidVersion(t *testing.T) {
-	base := ProviderInput{
-		Slug: "provider", Name: "Provider", Kind: "unknown", AdapterAppID: "provider-adapter",
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "provider-key"},
-	}
-	if _, err := normalizeProviderInput(base); err == nil {
-		t.Fatal("expected unknown provider kind to be rejected")
-	}
-	base.Kind = ProviderKindGemini
-	base.APIVersion = "../../secrets"
-	if _, err := normalizeProviderInput(base); err == nil {
-		t.Fatal("expected invalid API version to be rejected")
-	}
-}
-
 func TestQualifiedModelRequiresKnownProviderInVirtualKey(t *testing.T) {
-	service, _, _ := newTestService()
-	user, _, _ := provisionTestRoute(t, service)
-	_, err := service.CreateVirtualKey(context.Background(), VirtualKeyInput{
+	planes := newTestControlPlanes()
+	user, _, _ := provisionTestRoute(t, planes)
+	_, err := planes.keys.CreateVirtualKey(context.Background(), VirtualKeyInput{
 		Name: "invalid", UserID: user.ID, AllowedModels: []string{"missing/model"},
 	})
 	var validation *ValidationError

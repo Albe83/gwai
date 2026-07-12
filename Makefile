@@ -8,7 +8,7 @@ K3S ?= /usr/local/bin/k3s
 JQ ?= jq
 REGISTRY ?= localhost
 TAG ?= dev
-SERVICES := control-plane \
+SERVICES := control-plane virtual-key-control-plane \
 	openai-gateway openai-responses-gateway anthropic-gateway gemini-gateway \
 	openai-chat-adapter openai-responses-adapter anthropic-adapter gemini-adapter
 IMAGE_PREFIX := $(if $(REGISTRY),$(REGISTRY)/,)
@@ -70,6 +70,7 @@ e2e-k3s:
 helm-lint:
 	$(HELM) lint deploy/helm/gwai
 	$(HELM) lint deploy/helm/gwai -f deploy/helm/gwai/ci/multi-provider-values.yaml
+	HELM=$(HELM) bash scripts/check-helm-boundaries.sh
 
 deploy:
 	$(HELM) upgrade --install gwai deploy/helm/gwai \

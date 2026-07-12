@@ -13,8 +13,12 @@ import (
 )
 
 func run() error {
-	logger := platform.NewLogger("control-plane")
+	logger := platform.NewLogger("virtual-key-control-plane")
 	adminToken, err := platform.RequiredEnv("GWAI_ADMIN_TOKEN")
+	if err != nil {
+		return err
+	}
+	appToken, err := platform.RequiredEnv("APP_API_TOKEN")
 	if err != nil {
 		return err
 	}
@@ -25,17 +29,14 @@ func run() error {
 	port := platform.Env("PORT", "8080")
 	daprPort := platform.Env("DAPR_HTTP_PORT", "3500")
 	daprClient := daprhttp.New("http://127.0.0.1:"+daprPort, os.Getenv("DAPR_API_TOKEN"), &http.Client{Timeout: 15 * time.Second})
-	users := controlplane.NewUserRepository(daprhttp.NewStateStore(
-		daprClient, platform.Env("GWAI_CONTROL_STATE_STORE", "gwai-control-state"),
+	keys := controlplane.NewVirtualKeyRepository(daprhttp.NewStateStore(
+		daprClient, platform.Env("GWAI_VIRTUAL_KEY_STATE_STORE", "gwai-virtual-key-state"),
 	))
 	providers := controlplane.NewProviderRepository(daprhttp.NewStateStore(
 		daprClient, platform.Env("GWAI_PROVIDER_STATE_STORE", "gwai-provider-state"),
 	))
-	subjects := controlplane.NewRemoteSubjectRegistry(
-		daprClient, platform.Env("GWAI_VIRTUAL_KEY_CONTROL_APP_ID", "gwai-virtual-key-control-plane"),
-	)
-	service := controlplane.NewResourceService(users, providers, subjects)
-	handler := controlplane.NewResourceHTTPHandler(service, adminToken, maxBody, logger)
+	service := controlplane.NewVirtualKeyService(keys, providers)
+	handler := controlplane.NewVirtualKeyHTTPHandler(service, adminToken, appToken, maxBody, logger)
 
 	server := &http.Server{
 		Addr:              ":" + port,

@@ -1,16 +1,23 @@
-# Control-plane API
+# Control-plane APIs
 
-All `/v1` endpoints require `Authorization: Bearer <admin-token>`. JSON request
-bodies reject unknown fields. Errors use `application/problem+json`.
+All registered `/v1` operations require `Authorization: Bearer <admin-token>`.
+JSON request bodies reject unknown fields. Application errors from those
+operations use `application/problem+json`; unmatched routes use Go's standard
+HTTP 404/405 response.
 
-| Resource | Collection | Item |
-| --- | --- | --- |
-| Users | `POST, GET /v1/users` | `GET, PUT, DELETE /v1/users/{id}` |
-| Providers | `POST, GET /v1/providers` | `GET, PUT, DELETE /v1/providers/{id}` |
-| Virtual keys | `POST, GET /v1/virtual-keys` | `GET, PUT, DELETE /v1/virtual-keys/{id}` |
+| Service | Resource | Collection | Item |
+| --- | --- | --- | --- |
+| `gwai-control-plane` | Users | `POST, GET /v1/users` | `GET, PUT, DELETE /v1/users/{id}` |
+| `gwai-control-plane` | Providers | `POST, GET /v1/providers` | `GET, PUT, DELETE /v1/providers/{id}` |
+| `gwai-virtual-key-control-plane` | Virtual keys | `POST, GET /v1/virtual-keys` | `GET, PUT, DELETE /v1/virtual-keys/{id}` |
+
+The services have independent Kubernetes Services and do not mirror each
+other's routes. The default local port forwards in the getting-started guide use
+`8081` for users/providers and `8082` for virtual keys.
 
 `PUT` is a complete replacement of editable fields. IDs and timestamps remain
-server-owned. Status is `active` or `disabled`.
+server-owned. Status is `active` or `disabled`. A user's monotonic `revision` is
+also server-owned and coordinates its authorization projection.
 
 ## Providers and routing
 
@@ -81,9 +88,48 @@ The `key` member is never returned again. A user cannot be deleted while it has
 virtual keys. Deleting a provider makes its qualified names unroutable but does
 not rewrite virtual-key allowlists.
 
+The virtual-key service validates the user against a local, revisioned subject
+projection. An active key requires an active, non-deleted subject. Missing or
+invalid subject state fails closed. Changing the user to `disabled` revokes all
+of that user's keys without rewriting each key record; re-enabling the user with
+a newer revision makes otherwise-active keys usable again.
+
+User creation stores the canonical private record before synchronizing its
+subject. If that cross-service response is ambiguous, creation returns an error
+but retains the user; authorization remains denied until synchronization is
+known. Repeating a complete `PUT /v1/users/{id}` advances the revision and
+repairs the subject projection.
+
+Updates use the same fail-closed ordering. Activation writes the canonical
+record before subject synchronization; if that step fails, a PUT can report an
+error after private state changed while authorization remains disabled.
+Repeating the complete PUT repairs the projection. Disablement writes the
+subject first, so a partial failure can only revoke access early.
+
+User deletion uses a fence rather than a cross-store scan. The virtual-key
+service atomically verifies its per-user key index is empty and stores a
+non-reversible tombstone before the private user record is removed. Concurrent
+key creation or reassignment therefore conflicts with deletion instead of
+creating an orphan.
+
 ## Runtime boundary
 
-The control plane exposes no internal authorization or route-resolution HTTP
-API. Gateway and adapter processes use a read-only runtime interface over the
-Dapr State Store; only administrative mutations cross the control-plane HTTP
-boundary.
+Neither control plane exposes an authorization or route-resolution API to the
+data plane. Gateways read key/subject state and provider state directly;
+adapters read only provider state.
+
+The resource service invokes two non-public virtual-key operations through Dapr:
+
+- `POST /internal/v1/subjects/sync` for idempotent, ordered status revisions;
+- `POST /internal/v1/subjects/fence` for deletion fencing.
+
+They require the Dapr application token and an ACL allowing only the
+`gwai-control-plane` identity. They are not admin APIs and must not be exposed
+through an ingress.
+
+## State compatibility
+
+This 0.x layout replaces the former single `gwai-state` registry with
+`gwai-control-state`, `gwai-provider-state` and `gwai-virtual-key-state`. There
+is no automatic migration. Upgrade using a fresh installation or explicitly
+reset and reprovision the old pre-release users, providers and virtual keys.
