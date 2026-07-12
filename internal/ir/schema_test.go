@@ -8,7 +8,7 @@ import (
 )
 
 func TestPublishedSchemaIsValidJSONAndMatchesVersion(t *testing.T) {
-	data, err := os.ReadFile("../../api/ir/2026-07-11.schema.json")
+	data, err := os.ReadFile("../../api/ir/2026-07-12.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}

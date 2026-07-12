@@ -13,6 +13,13 @@ const (
 	StatusDisabled Status = "disabled"
 )
 
+const (
+	ProviderKindAnthropic       = "anthropic"
+	ProviderKindOpenAIChat      = "openai-chat"
+	ProviderKindOpenAIResponses = "openai-responses"
+	ProviderKindGemini          = "gemini"
+)
+
 type User struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`

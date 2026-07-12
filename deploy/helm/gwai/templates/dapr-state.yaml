@@ -29,8 +29,10 @@ spec:
       value: "name"
 scopes:
   - {{ include "gwai.fullname" . }}-control-plane
-  - {{ include "gwai.fullname" . }}-openai-gateway
-  {{- range $adapter := .Values.anthropicAdapters }}
+  {{- range $gateway := .Values.gateways }}
+  - {{ include "gwai.gatewayName" (dict "root" $ "gateway" $gateway) }}
+  {{- end }}
+  {{- range $adapter := .Values.providerAdapters }}
   - {{ $adapter.appID | quote }}
   {{- end }}
 {{- end }}

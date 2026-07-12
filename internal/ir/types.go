@@ -5,7 +5,7 @@ package ir
 
 import "encoding/json"
 
-const Version = "2026-07-11"
+const Version = "2026-07-12"
 
 const (
 	RoleSystem    = "system"
@@ -64,12 +64,15 @@ type ToolCall struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	Signature string          `json:"signature,omitempty"`
 }
 
 type ToolResult struct {
-	ToolCallID string    `json:"tool_call_id"`
-	Content    []Content `json:"content"`
-	IsError    bool      `json:"is_error,omitempty"`
+	ToolCallID string          `json:"tool_call_id"`
+	Name       string          `json:"name,omitempty"`
+	Content    []Content       `json:"content,omitempty"`
+	Result     json.RawMessage `json:"result,omitempty"`
+	IsError    bool            `json:"is_error,omitempty"`
 }
 
 type Tool struct {
@@ -97,9 +100,10 @@ type Response struct {
 }
 
 type Usage struct {
-	InputTokens       int `json:"input_tokens"`
-	OutputTokens      int `json:"output_tokens"`
-	CachedInputTokens int `json:"cached_input_tokens,omitempty"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CachedInputTokens        int `json:"cached_input_tokens,omitempty"`
 }
 
 const (

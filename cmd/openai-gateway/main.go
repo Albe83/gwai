@@ -9,7 +9,7 @@ import (
 
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
-	openaiadapter "github.com/Albe83/gwai/internal/openai"
+	"github.com/Albe83/gwai/internal/openai"
 	"github.com/Albe83/gwai/internal/platform"
 )
 
@@ -28,7 +28,7 @@ func run() error {
 	daprClient := daprhttp.New("http://127.0.0.1:"+daprPort, os.Getenv("DAPR_API_TOKEN"), &http.Client{})
 	store := daprhttp.NewStateStore(daprClient, platform.Env("GWAI_STATE_STORE", "gwai-state"))
 	runtime := controlplane.NewRuntime(controlplane.NewRepository(store))
-	handler := openaiadapter.NewHTTPHandler(runtime, daprClient, maxBody, requestTimeout, logger)
+	handler := openai.NewHTTPHandler(runtime, daprClient, maxBody, requestTimeout, logger)
 
 	server := &http.Server{
 		Addr:              ":" + port,

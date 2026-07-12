@@ -1,89 +1,92 @@
 # gwai
 
-gwai is a provider-neutral AI gateway. It separates lifecycle management from
-request translation and uses a versioned intermediate representation (IR) so a
-new client API or provider needs one translator, not a converter for every
-client/provider pair.
+gwai is a provider-neutral AI gateway. Four independent client gateways and
+four provider adapters meet only at a validated, versioned intermediate
+representation (IR). Adding a client or provider protocol therefore adds one
+translator instead of a converter for every client/provider pair.
 
-The current vertical slice accepts OpenAI-compatible Chat Completions and sends
-Anthropic Messages requests. The control plane manages users, virtual keys, and
-provider configurations; it is not on the data-plane request path.
+## Supported protocol edges
 
-## What works
+| Direction | Protocol | Endpoint / provider kind |
+| --- | --- | --- |
+| Client gateway | OpenAI Chat Completions | `POST /v1/chat/completions` |
+| Client gateway | OpenAI Responses | `POST /v1/responses` |
+| Client gateway | Anthropic Messages | `POST /v1/messages` |
+| Client gateway | Gemini GenerateContent | `POST /v1beta/models/{qualified-model}:generateContent` |
+| Provider adapter | OpenAI Chat Completions | `openai-chat` |
+| Provider adapter | OpenAI Responses | `openai-responses` |
+| Provider adapter | Anthropic Messages | `anthropic` |
+| Provider adapter | Gemini GenerateContent | `gemini` |
 
-- CRUD lifecycle APIs for users, virtual keys, and providers.
-- One-time virtual-key disclosure; only a SHA-256 digest and display prefix are
-  persisted.
-- Exact per-key allowlists using `provider-slug/upstream-model`, expiry, and
-  user/key/provider disablement.
-- OpenAI Chat Completions input for text, image URLs/data URLs, system and
-  developer messages, tools, tool calls, and tool results.
-- Anthropic Messages output with tool and usage translation.
-- Direct data-plane reads through Dapr State Store and provider-specific Dapr
-  service invocation; gateways never invoke the control plane.
-- Per-provider adapter identities, Kubernetes Secret scopes, Dapr mTLS, tokens,
-  ACLs, API allowlists, and retry policy.
-- A Helm chart with non-root distroless services and a persistent Valkey state
-  store for local k3s.
-
-Streaming is intentionally rejected with an explicit OpenAI-style error in
-this first slice. See [API compatibility](docs/openai-compatibility.md) for the
-exact supported surface.
+Every gateway can route to every adapter when the requested semantics belong to
+the portable subset. Text, system instructions, images, function tools/calls/
+results, common sampling controls, stop reasons and token usage cross the IR.
+Streaming, stateful conversations, hosted tools, reasoning/thinking and
+structured output are rejected explicitly rather than silently discarded.
+See [protocol compatibility](docs/protocol-compatibility.md) for exact limits.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Client[OpenAI client] -->|POST /v1/chat/completions| Gateway[OpenAI gateway]
+    Clients[OpenAI / Anthropic / Gemini clients] --> Gateways[Four protocol gateways]
     CP[Control plane admin API] -->|write| State[(Dapr State Store)]
-    Gateway -->|read key + provider| State
-    Gateway -->|Dapr invocation: versioned IR| Adapter[Provider-specific Anthropic adapter]
-    Adapter -->|read own provider| State
-    Adapter -->|Dapr Secret Store| Secrets[Kubernetes Secret]
-    Adapter -->|POST /v1/messages| Provider[Anthropic API]
+    Gateways -->|read auth + route| State
+    Gateways -->|Dapr invocation: IR 2026-07-12| Adapters[Provider-specific adapter instance]
+    Adapters -->|read own provider| State
+    Adapters -->|Dapr Secret Store| Secrets[Kubernetes Secret]
+    Adapters --> Providers[OpenAI / Anthropic / Gemini APIs]
 ```
 
-The detailed boundaries and request sequence are in
-[Architecture](docs/architecture.md). The wire contract is
-[`2026-07-11.schema.json`](api/ir/2026-07-11.schema.json).
+Gateways contain no provider HTTP client and adapters contain no client-gateway
+logic. The selected `adapter_app_id` is resolved from state and invoked through
+Dapr at `/v1/generate`. The control plane is not on the inference request path.
+The contract is [`2026-07-12.schema.json`](api/ir/2026-07-12.schema.json).
+
+## What works
+
+- CRUD lifecycle APIs for users, virtual keys and providers.
+- One-time virtual-key disclosure with exact `provider/model` allowlists,
+  expiry and user/key/provider disablement.
+- Direct data-plane reads and provider-specific Dapr service invocation.
+- Per-provider identities, Secret scopes, Dapr mTLS/tokens/ACLs and retries.
+- Generic Helm lists for any mix of the four gateways and provider adapters.
+- Non-root distroless services and persistent Valkey state for local k3s.
+- Race-tested translators and an E2E path that sends all four client protocols
+  through one adapter while the control plane is unavailable.
 
 ## Local k3s quick start
 
 Required tools: Go 1.26, a Docker-compatible CLI, k3s, kubectl, Dapr 1.18,
-Helm 3, curl, and jq.
+Helm 3, curl and jq.
 
 ```bash
 make local-deploy
 kubectl -n gwai get pods
-```
-
-The default chart creates one adapter instance with provider slug `anthropic`
-and Dapr app ID `gwai-anthropic`. To verify the whole path without an external
-API key:
-
-```bash
 make e2e-k3s
 ```
 
-For a real provider and provisioning calls, follow
-[Getting started](docs/getting-started.md).
+The default chart exposes all four gateways and deploys one Anthropic adapter
+with provider slug `anthropic` and Dapr app ID `gwai-anthropic`. Follow
+[getting started](docs/getting-started.md) for real credentials and additional
+providers.
 
 ## Development
 
 ```bash
-make check       # formatting, vet, race-enabled tests, Helm lint
-make build       # bin/control-plane, bin/openai-gateway, bin/anthropic-adapter
-make images      # local OCI images
+make check       # formatting, vet, race tests, contract checks, Helm lint
+make build       # all control-plane, gateway and adapter binaries
+make images      # all nine OCI images
 make helm-lint
 ```
 
-Runtime code has no third-party Go modules. Infrastructure dependencies and
-their rationale are recorded in [Dependencies](docs/dependencies.md).
+Runtime Go code has no third-party modules. Infrastructure dependencies are
+recorded in [dependencies](docs/dependencies.md).
 
 ## Project status
 
-This is a pre-release vertical slice. The provider/model state schema introduced
-here is intentionally incompatible with the earlier model-alias prototype; no
-automatic migration is provided. Before public exposure, add streaming,
-quotas/rate limits, audit events, external observability, provider failover, and
-a production-grade high-availability state store.
+This is pre-release software. Before public exposure, add streaming, quotas,
+audit events, external observability, provider failover and a production-grade
+high-availability state store. IR `2026-07-12` is intentionally incompatible
+with the earlier pre-release IR; no automatic state or contract migration is
+provided.

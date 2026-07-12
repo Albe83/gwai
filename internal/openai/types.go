@@ -88,6 +88,7 @@ type Choice struct {
 type AssistantOutput struct {
 	Role      string     `json:"role"`
 	Content   *string    `json:"content"`
+	Refusal   *string    `json:"refusal,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 

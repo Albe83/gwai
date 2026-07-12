@@ -2,6 +2,51 @@ package anthropic
 
 import "encoding/json"
 
+// ClientMessageRequest is the Anthropic Messages wire contract accepted by the
+// client-facing gateway. Content is intentionally kept raw here because the
+// public API permits either a string or an array of typed blocks. The gateway
+// translator is the only code that interprets it.
+type ClientMessageRequest struct {
+	Model         string          `json:"model"`
+	MaxTokens     int             `json:"max_tokens"`
+	Messages      []ClientMessage `json:"messages"`
+	System        json.RawMessage `json:"system,omitempty"`
+	Temperature   *float64        `json:"temperature,omitempty"`
+	TopP          *float64        `json:"top_p,omitempty"`
+	StopSequences []string        `json:"stop_sequences,omitempty"`
+	Tools         []Tool          `json:"tools,omitempty"`
+	ToolChoice    *ToolChoice     `json:"tool_choice,omitempty"`
+	Stream        bool            `json:"stream,omitempty"`
+
+	// These are recognized so the gateway can return a precise unsupported
+	// feature error instead of silently dropping provider-specific behavior.
+	TopK         *int            `json:"top_k,omitempty"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	ServiceTier  string          `json:"service_tier,omitempty"`
+	Thinking     json.RawMessage `json:"thinking,omitempty"`
+	OutputConfig json.RawMessage `json:"output_config,omitempty"`
+}
+
+type ClientMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+type ClientContentBlock struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Source    *ImageSource    `json:"source,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
+}
+
+// MessageRequest is the Anthropic provider request produced by the upstream
+// adapter. It is deliberately distinct from ClientMessageRequest so neither
+// translation direction depends on the other.
 type MessageRequest struct {
 	Model         string         `json:"model"`
 	MaxTokens     int            `json:"max_tokens"`

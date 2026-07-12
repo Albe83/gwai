@@ -1,5 +1,8 @@
 # OpenAI Chat Completions compatibility
 
+OpenAI Responses and the non-OpenAI protocol surfaces are documented in the
+[cross-protocol compatibility matrix](protocol-compatibility.md).
+
 The gateway exposes `POST /v1/chat/completions` and uses Bearer virtual-key
 authentication. Responses use the `chat.completion` object and OpenAI-style
 error envelope.
@@ -37,9 +40,9 @@ Token usage and stop reasons are translated back to OpenAI names.
 
 Unsupported known parameters return HTTP 400 with code
 `unsupported_parameter`; the gateway does not silently discard them. Unknown
-future JSON members are currently ignored for forward compatibility.
+JSON members are rejected as invalid requests.
 
-Anthropic thinking blocks are not exposed as chain-of-thought. Their tokens
-remain included in usage. Signed thinking blocks cannot yet round-trip through
-Chat Completions, so use a provider configuration without default adaptive
-thinking until reasoning is added to the IR.
+Provider thinking/reasoning blocks are not exposed as chain-of-thought. Their
+tokens remain included in usage where the provider reports them. Gemini tool
+call thought signatures have a dedicated IR field, but general reasoning is
+outside the portable contract.

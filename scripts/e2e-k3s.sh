@@ -5,7 +5,10 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 NAMESPACE=${GWAI_NAMESPACE:-gwai}
 RELEASE=${GWAI_RELEASE:-gwai}
 CONTROL_PORT=${GWAI_E2E_CONTROL_PORT:-28081}
-GATEWAY_PORT=${GWAI_E2E_GATEWAY_PORT:-28080}
+OPENAI_CHAT_PORT=${GWAI_E2E_GATEWAY_PORT:-28080}
+OPENAI_RESPONSES_PORT=${GWAI_E2E_RESPONSES_PORT:-28083}
+ANTHROPIC_GATEWAY_PORT=${GWAI_E2E_ANTHROPIC_PORT:-28084}
+GEMINI_GATEWAY_PORT=${GWAI_E2E_GEMINI_PORT:-28085}
 PROVIDER_PORT=${GWAI_E2E_PROVIDER_PORT:-28082}
 PROVIDER_SECRET=${GWAI_E2E_PROVIDER_SECRET:-gwai-anthropic}
 PROVIDER_SLUG=${GWAI_E2E_PROVIDER_SLUG:-anthropic}
@@ -17,7 +20,10 @@ RUN_ID="e2e-$(date +%s)-$$"
 
 provider_pid=""
 control_forward_pid=""
-gateway_forward_pid=""
+openai_chat_forward_pid=""
+openai_responses_forward_pid=""
+anthropic_forward_pid=""
+gemini_forward_pid=""
 created_secret=false
 admin_token=""
 user_id=""
@@ -58,7 +64,7 @@ cleanup() {
     [[ -n "$provider_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/providers/${provider_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
     [[ -n "$user_id" ]] && curl -fsS -X DELETE "http://127.0.0.1:${CONTROL_PORT}/v1/users/${user_id}" -H "Authorization: Bearer ${admin_token}" >/dev/null
   fi
-  for pid in "$control_forward_pid" "$gateway_forward_pid" "$provider_pid"; do
+  for pid in "$control_forward_pid" "$openai_chat_forward_pid" "$openai_responses_forward_pid" "$anthropic_forward_pid" "$gemini_forward_pid" "$provider_pid"; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
   done
   wait 2>/dev/null
@@ -75,6 +81,9 @@ done
 
 kubectl -n "$NAMESPACE" get deployment "${RELEASE}-control-plane" >/dev/null
 kubectl -n "$NAMESPACE" get deployment "${RELEASE}-openai-gateway" >/dev/null
+kubectl -n "$NAMESPACE" get deployment "${RELEASE}-openai-responses-gateway" >/dev/null
+kubectl -n "$NAMESPACE" get deployment "${RELEASE}-anthropic-gateway" >/dev/null
+kubectl -n "$NAMESPACE" get deployment "${RELEASE}-gemini-gateway" >/dev/null
 kubectl -n "$NAMESPACE" get deployment "$ADAPTER_DEPLOYMENT" >/dev/null
 
 if ! kubectl -n "$NAMESPACE" get secret "$PROVIDER_SECRET" >/dev/null 2>&1; then
@@ -85,12 +94,21 @@ fi
 (cd "$ROOT_DIR" && "$GO_BIN" run ./test/e2e/fakeprovider -listen "0.0.0.0:${PROVIDER_PORT}") >"$TMP_DIR/provider.log" 2>&1 &
 provider_pid=$!
 start_control_forward control-forward.log
-kubectl -n "$NAMESPACE" port-forward "service/${RELEASE}-openai-gateway" "${GATEWAY_PORT}:8080" >"$TMP_DIR/gateway-forward.log" 2>&1 &
-gateway_forward_pid=$!
+kubectl -n "$NAMESPACE" port-forward "service/${RELEASE}-openai-gateway" "${OPENAI_CHAT_PORT}:8080" >"$TMP_DIR/openai-chat-forward.log" 2>&1 &
+openai_chat_forward_pid=$!
+kubectl -n "$NAMESPACE" port-forward "service/${RELEASE}-openai-responses-gateway" "${OPENAI_RESPONSES_PORT}:8080" >"$TMP_DIR/openai-responses-forward.log" 2>&1 &
+openai_responses_forward_pid=$!
+kubectl -n "$NAMESPACE" port-forward "service/${RELEASE}-anthropic-gateway" "${ANTHROPIC_GATEWAY_PORT}:8080" >"$TMP_DIR/anthropic-forward.log" 2>&1 &
+anthropic_forward_pid=$!
+kubectl -n "$NAMESPACE" port-forward "service/${RELEASE}-gemini-gateway" "${GEMINI_GATEWAY_PORT}:8080" >"$TMP_DIR/gemini-forward.log" 2>&1 &
+gemini_forward_pid=$!
 
 wait_for_url "http://127.0.0.1:${PROVIDER_PORT}/healthz"
 wait_for_url "http://127.0.0.1:${CONTROL_PORT}/readyz"
-wait_for_url "http://127.0.0.1:${GATEWAY_PORT}/readyz"
+wait_for_url "http://127.0.0.1:${OPENAI_CHAT_PORT}/readyz"
+wait_for_url "http://127.0.0.1:${OPENAI_RESPONSES_PORT}/readyz"
+wait_for_url "http://127.0.0.1:${ANTHROPIC_GATEWAY_PORT}/readyz"
+wait_for_url "http://127.0.0.1:${GEMINI_GATEWAY_PORT}/readyz"
 
 admin_token=$(kubectl -n "$NAMESPACE" get secret "${RELEASE}-admin" -o jsonpath='{.data.admin-token}' | base64 -d)
 node_ip=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
@@ -116,14 +134,43 @@ created_key=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/virtual-keys" \
 key_id=$(jq -er .virtual_key.id <<<"$created_key")
 virtual_key=$(jq -er .key <<<"$created_key")
 
-call_gateway() {
-  curl -fsS "http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions" \
+call_openai_chat() {
+  curl -fsS "http://127.0.0.1:${OPENAI_CHAT_PORT}/v1/chat/completions" \
     -H "Authorization: Bearer ${virtual_key}" -H 'Content-Type: application/json' \
     -d "$(jq -nc --arg model "$qualified_model" '{model:$model,messages:[{role:"system",content:"Be concise"},{role:"user",content:"Say ok"}],max_completion_tokens:32}')"
 }
 
-completion=$(call_gateway)
-jq -e '.object == "chat.completion" and .choices[0].message.content == "gwai e2e ok" and .usage.total_tokens == 11' <<<"$completion" >/dev/null
+call_openai_responses() {
+  curl -fsS "http://127.0.0.1:${OPENAI_RESPONSES_PORT}/v1/responses" \
+    -H "Authorization: Bearer ${virtual_key}" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg model "$qualified_model" '{model:$model,input:"Say ok",max_output_tokens:32,store:false}')"
+}
+
+call_anthropic() {
+  curl -fsS "http://127.0.0.1:${ANTHROPIC_GATEWAY_PORT}/v1/messages" \
+    -H "x-api-key: ${virtual_key}" -H 'anthropic-version: 2023-06-01' -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg model "$qualified_model" '{model:$model,max_tokens:32,system:"Be concise",messages:[{role:"user",content:"Say ok"}]}')"
+}
+
+call_gemini() {
+  curl -fsS "http://127.0.0.1:${GEMINI_GATEWAY_PORT}/v1beta/models/${qualified_model}:generateContent" \
+    -H "x-goog-api-key: ${virtual_key}" -H 'Content-Type: application/json' \
+    -d '{"contents":[{"role":"user","parts":[{"text":"Say ok"}]}],"generationConfig":{"maxOutputTokens":32}}'
+}
+
+assert_all_gateways() {
+  local completion response
+  completion=$(call_openai_chat)
+  jq -e '.object == "chat.completion" and .choices[0].message.content == "gwai e2e ok" and .usage.total_tokens == 11' <<<"$completion" >/dev/null
+  response=$(call_openai_responses)
+  jq -e '.object == "response" and .output[0].content[0].text == "gwai e2e ok" and .usage.total_tokens == 11' <<<"$response" >/dev/null
+  response=$(call_anthropic)
+  jq -e '.type == "message" and .content[0].text == "gwai e2e ok" and (.usage.input_tokens + .usage.output_tokens) == 11' <<<"$response" >/dev/null
+  response=$(call_gemini)
+  jq -e '.candidates[0].content.parts[0].text == "gwai e2e ok" and .usageMetadata.totalTokenCount == 11' <<<"$response" >/dev/null
+}
+
+assert_all_gateways
 
 # Inference must remain available with no control-plane pod: gateway and adapter
 # both read the shared registry directly through their own Dapr sidecars.
@@ -134,8 +181,7 @@ control_replicas=$(kubectl -n "$NAMESPACE" get "deployment/${RELEASE}-control-pl
 kubectl -n "$NAMESPACE" scale "deployment/${RELEASE}-control-plane" --replicas=0 >/dev/null
 control_scaled_down=true
 kubectl -n "$NAMESPACE" wait --for=delete pod -l app.kubernetes.io/component=control-plane --timeout=60s >/dev/null
-completion=$(call_gateway)
-jq -e '.choices[0].message.content == "gwai e2e ok"' <<<"$completion" >/dev/null
+assert_all_gateways
 
 kubectl -n "$NAMESPACE" scale "deployment/${RELEASE}-control-plane" --replicas="$control_replicas" >/dev/null
 kubectl -n "$NAMESPACE" rollout status "deployment/${RELEASE}-control-plane" --timeout=60s >/dev/null
@@ -146,7 +192,6 @@ wait_for_url "http://127.0.0.1:${CONTROL_PORT}/readyz"
 # Adapter restart verifies provider-specific Dapr discovery after endpoint rotation.
 kubectl -n "$NAMESPACE" rollout restart "deployment/${ADAPTER_DEPLOYMENT}" >/dev/null
 kubectl -n "$NAMESPACE" rollout status "deployment/${ADAPTER_DEPLOYMENT}" --timeout=60s >/dev/null
-completion=$(call_gateway)
-jq -e '.choices[0].message.content == "gwai e2e ok"' <<<"$completion" >/dev/null
+assert_all_gateways
 
-echo "k3s e2e passed: control-plane outage, shared state reads, provider-specific invocation, secrets, and translation"
+echo "k3s e2e passed: four independent gateway protocols, control-plane outage, provider-specific invocation, secrets, and IR translation"

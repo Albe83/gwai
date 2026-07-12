@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -30,6 +31,21 @@ func isJSONObject(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &object) == nil && object != nil
 }
 
+func decodeStrictJSON(raw []byte, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("must contain a single JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
 func parseContent(raw json.RawMessage, role string) ([]ir.Content, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
@@ -43,17 +59,23 @@ func parseContent(raw json.RawMessage, role string) ([]ir.Content, error) {
 		return []ir.Content{{Type: ir.ContentText, Text: text}}, nil
 	}
 	var parts []ContentPart
-	if err := json.Unmarshal(trimmed, &parts); err != nil {
+	if err := decodeStrictJSON(trimmed, &parts); err != nil {
 		return nil, fmt.Errorf("content must be a string or an array of content parts: %w", err)
 	}
 	result := make([]ir.Content, 0, len(parts))
 	for index, part := range parts {
 		switch part.Type {
 		case "text":
+			if part.ImageURL != nil {
+				return nil, fmt.Errorf("content[%d]: text content cannot contain image_url", index)
+			}
 			result = append(result, ir.Content{Type: ir.ContentText, Text: part.Text})
 		case "image_url":
-			if role != "user" && role != "tool" {
-				return nil, fmt.Errorf("content[%d]: image_url is only supported for user and tool messages", index)
+			if role != "user" {
+				return nil, fmt.Errorf("content[%d]: image_url is only supported for user messages", index)
+			}
+			if part.Text != "" {
+				return nil, fmt.Errorf("content[%d]: image_url content cannot contain text", index)
 			}
 			if part.ImageURL == nil || part.ImageURL.URL == "" {
 				return nil, fmt.Errorf("content[%d].image_url.url is required", index)
@@ -147,7 +169,7 @@ func parseToolChoice(raw json.RawMessage, hasTools bool) (*ir.ToolChoice, error)
 			Name string `json:"name"`
 		} `json:"function"`
 	}
-	if err := json.Unmarshal(trimmed, &choice); err != nil {
+	if err := decodeStrictJSON(trimmed, &choice); err != nil {
 		return nil, err
 	}
 	if choice.Type != "function" || choice.Function.Name == "" {
@@ -231,6 +253,7 @@ func ToIR(request ChatCompletionRequest, route controlplane.Route, requestID str
 	}
 
 	messages := make([]ir.Message, 0, len(request.Messages))
+	toolCallNames := make(map[string]string)
 	for messageIndex, message := range request.Messages {
 		if message.Name != "" {
 			return ir.Request{}, invalid(fmt.Sprintf("messages.%d.name", messageIndex), "unsupported_parameter", "named messages are not supported by the selected provider")
@@ -243,6 +266,12 @@ func ToIR(request ChatCompletionRequest, route controlplane.Route, requestID str
 		case ir.RoleSystem, ir.RoleUser, ir.RoleAssistant, ir.RoleTool:
 		default:
 			return ir.Request{}, invalid(fmt.Sprintf("messages.%d.role", messageIndex), "invalid_role", "unsupported message role %q", message.Role)
+		}
+		if role != ir.RoleAssistant && len(message.ToolCalls) > 0 {
+			return ir.Request{}, invalid(fmt.Sprintf("messages.%d.tool_calls", messageIndex), "invalid_tool_call", "tool_calls are only allowed on assistant messages")
+		}
+		if role != ir.RoleTool && message.ToolCallID != "" {
+			return ir.Request{}, invalid(fmt.Sprintf("messages.%d.tool_call_id", messageIndex), "invalid_tool_result", "tool_call_id is only allowed on tool messages")
 		}
 		contents, err := parseContent(message.Content, role)
 		if err != nil {
@@ -258,13 +287,18 @@ func ToIR(request ChatCompletionRequest, route controlplane.Route, requestID str
 					return ir.Request{}, invalid(fmt.Sprintf("messages.%d.tool_calls.%d.function.arguments", messageIndex, toolIndex), "invalid_tool_arguments", "tool arguments must contain a JSON object")
 				}
 				contents = append(contents, ir.Content{Type: ir.ContentToolCall, ToolCall: &ir.ToolCall{ID: toolCall.ID, Name: toolCall.Function.Name, Arguments: arguments}})
+				toolCallNames[toolCall.ID] = toolCall.Function.Name
 			}
 		}
 		if role == ir.RoleTool {
 			if message.ToolCallID == "" {
 				return ir.Request{}, invalid(fmt.Sprintf("messages.%d.tool_call_id", messageIndex), "invalid_tool_result", "tool_call_id is required for tool messages")
 			}
-			contents = []ir.Content{{Type: ir.ContentToolResult, ToolResult: &ir.ToolResult{ToolCallID: message.ToolCallID, Content: contents}}}
+			toolName, exists := toolCallNames[message.ToolCallID]
+			if !exists {
+				return ir.Request{}, invalid(fmt.Sprintf("messages.%d.tool_call_id", messageIndex), "invalid_tool_result", "tool_call_id does not reference an earlier assistant tool call")
+			}
+			contents = []ir.Content{{Type: ir.ContentToolResult, ToolResult: &ir.ToolResult{ToolCallID: message.ToolCallID, Name: toolName, Content: contents}}}
 		}
 		if len(contents) == 0 {
 			return ir.Request{}, invalid(fmt.Sprintf("messages.%d.content", messageIndex), "invalid_content", "message content cannot be empty unless assistant tool_calls are present")
@@ -343,9 +377,14 @@ func FromIR(response ir.Response, requestedModel, completionID string, created t
 		}
 	}
 	var content *string
+	var refusal *string
 	if text.Len() > 0 || len(toolCalls) == 0 {
 		value := text.String()
-		content = &value
+		if response.FinishReason == ir.FinishContent && value != "" {
+			refusal = &value
+		} else {
+			content = &value
+		}
 	}
 	finishReason := response.FinishReason
 	switch finishReason {
@@ -359,7 +398,7 @@ func FromIR(response ir.Response, requestedModel, completionID string, created t
 	}
 	return ChatCompletionResponse{
 		ID: completionID, Object: "chat.completion", Created: created.Unix(), Model: requestedModel,
-		Choices: []Choice{{Index: 0, Message: AssistantOutput{Role: "assistant", Content: content, ToolCalls: toolCalls}, FinishReason: finishReason}},
+		Choices: []Choice{{Index: 0, Message: AssistantOutput{Role: "assistant", Content: content, Refusal: refusal, ToolCalls: toolCalls}, FinishReason: finishReason}},
 		Usage: Usage{
 			PromptTokens:        response.Usage.InputTokens,
 			CompletionTokens:    response.Usage.OutputTokens,

@@ -17,12 +17,12 @@ spec:
   accessControl:
     defaultAction: deny
     trustDomain: public
-{{- range $adapter := .Values.anthropicAdapters }}
+{{- range $adapter := .Values.providerAdapters }}
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
-  name: {{ include "gwai.anthropicAdapterName" (dict "root" $root "adapter" $adapter) }}
+  name: {{ include "gwai.adapterName" (dict "root" $root "adapter" $adapter) }}
   labels:
     {{- include "gwai.labels" $root | nindent 4 }}
 spec:
@@ -49,7 +49,8 @@ spec:
     defaultAction: deny
     trustDomain: public
     policies:
-      - appId: {{ include "gwai.fullname" $root }}-openai-gateway
+      {{- range $gateway := $root.Values.gateways }}
+      - appId: {{ include "gwai.gatewayName" (dict "root" $root "gateway" $gateway) }}
         namespace: {{ $root.Release.Namespace }}
         trustDomain: public
         defaultAction: deny
@@ -57,17 +58,19 @@ spec:
           - name: /v1/generate
             httpVerb: ["POST"]
             action: allow
+      {{- end }}
 {{- end }}
+{{- range $gateway := .Values.gateways }}
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
-  name: {{ include "gwai.fullname" . }}-openai-gateway
+  name: {{ include "gwai.gatewayName" (dict "root" $root "gateway" $gateway) }}
   labels:
-    {{- include "gwai.labels" . | nindent 4 }}
+    {{- include "gwai.labels" $root | nindent 4 }}
 spec:
   tracing:
-    samplingRate: {{ .Values.dapr.tracingSamplingRate | quote }}
+    samplingRate: {{ $root.Values.dapr.tracingSamplingRate | quote }}
   api:
     allowed:
       - name: invoke
@@ -76,4 +79,5 @@ spec:
       - name: state
         version: v1.0
         protocol: http
+{{- end }}
 {{- end }}

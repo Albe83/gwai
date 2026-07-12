@@ -4,46 +4,62 @@
 
 ```bash
 make local-deploy
-kubectl -n gwai wait --for=condition=Ready pod --all --timeout=120s
+kubectl -n gwai wait --for=condition=Ready pod --all --timeout=180s
 ```
 
-For a registry-backed cluster, set `REGISTRY` and `TAG`, push the images, and
-run `make deploy REGISTRY=... TAG=...` instead of importing into local
-containerd.
+For a registry-backed cluster, set `REGISTRY` and `TAG`, push the images, then
+run `make deploy REGISTRY=... TAG=...`.
 
-The default Helm values create one adapter instance:
+The default values expose all four client protocols and one Anthropic provider:
 
 ```yaml
-anthropicAdapters:
+gateways:
+  - name: openai-gateway
+    image: {repository: gwai-openai-gateway}
+    # openai-responses-gateway, anthropic-gateway and gemini-gateway follow
+
+providerAdapters:
   - name: primary
+    kind: anthropic
     providerSlug: anthropic
     appID: gwai-anthropic
+    image: {repository: gwai-anthropic-adapter}
     secretNames: [gwai-anthropic]
 ```
 
-Every additional provider account needs another list entry with a unique
-`name`, `providerSlug`, `appID`, and appropriately restricted `secretNames`.
+Add one `providerAdapters` entry per provider account. `name`, `providerSlug`
+and `appID` must be unique. Select the image matching `kind`:
 
-## 2. Create the provider secret
+| `kind` | image repository |
+| --- | --- |
+| `anthropic` | `gwai-anthropic-adapter` |
+| `openai-chat` | `gwai-openai-chat-adapter` |
+| `openai-responses` | `gwai-openai-responses-adapter` |
+| `gemini` | `gwai-gemini-adapter` |
 
-The default adapter can read only a Secret named `gwai-anthropic`. Do not put
-provider keys in Helm values or Git.
+Optional `defaultMaxOutputTokens` and `maxOutputTokens` values are passed to
+adapters that enforce local token policy.
+
+## 2. Create a provider secret
+
+The default adapter can read only `gwai-anthropic`. Never place provider keys in
+Helm values or Git.
 
 ```bash
 kubectl -n gwai create secret generic gwai-anthropic \
   --from-literal=api-key="$ANTHROPIC_API_KEY"
 ```
 
-Change `anthropicAdapters[].secretNames` and upgrade the release before a
-provider references a different Secret.
+Change the matching `providerAdapters[].secretNames` and upgrade the release
+before referencing another Secret.
 
 ## 3. Reach the APIs
-
-Use two terminals:
 
 ```bash
 kubectl -n gwai port-forward service/gwai-control-plane 8081:8080
 kubectl -n gwai port-forward service/gwai-openai-gateway 8080:8080
+# alternatives: gwai-openai-responses-gateway, gwai-anthropic-gateway,
+#               gwai-gemini-gateway
 ```
 
 Load the generated admin token without printing it:
@@ -53,7 +69,7 @@ GWAI_ADMIN_TOKEN=$(kubectl -n gwai get secret gwai-admin \
   -o jsonpath='{.data.admin-token}' | base64 -d)
 ```
 
-## 4. Provision the provider and client key
+## 4. Provision a provider and client key
 
 ```bash
 USER_ID=$(curl -fsS http://127.0.0.1:8081/v1/users \
@@ -79,9 +95,14 @@ GWAI_API_KEY=$(curl -fsS http://127.0.0.1:8081/v1/virtual-keys \
   | jq -r .key)
 ```
 
-The key is returned once and cannot be recovered from the control plane.
+The virtual key is returned once. To configure another provider, use the same
+`providerSlug`, `kind` and `appID` as its Helm entry. Omitted endpoints and API
+versions receive the defaults in [the control-plane API](control-plane-api.md).
 
-## 5. Call the gateway
+## 5. Call any gateway
+
+This OpenAI Chat request can target the Anthropic adapter because routing is
+independent of the public protocol:
 
 ```bash
 curl -fsS http://127.0.0.1:8080/v1/chat/completions \
@@ -94,15 +115,16 @@ curl -fsS http://127.0.0.1:8080/v1/chat/completions \
   }' | jq
 ```
 
-If neither token-limit field is supplied, the selected adapter uses its
-`defaultMaxOutputTokens`. A zero `maxOutputTokens` delegates the upper bound to
-the upstream provider.
+The corresponding request formats and authentication headers for Responses,
+Anthropic and Gemini are listed in
+[protocol compatibility](protocol-compatibility.md).
 
 ## 6. Deterministic smoke test
 
-`make e2e-k3s` provisions temporary resources and a fake provider, exercises
-direct state reads and provider-specific invocation, restarts the control plane
-and adapter, then cleans up. It never requires or sends a real provider key.
+`make e2e-k3s` provisions temporary resources and a fake Anthropic provider,
+sends all four public client protocols through that one adapter, scales the
+control plane to zero, restarts the adapter, and cleans up. It never requires a
+real provider key.
 
-This pre-release schema does not migrate provider records or virtual keys from
-the earlier model-alias implementation; recreate them after upgrading.
+This pre-release schema does not migrate earlier provider records, virtual keys
+or IR payloads; recreate them after upgrading.

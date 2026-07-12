@@ -37,6 +37,20 @@ A provider contains a unique lowercase DNS-label `slug` and an explicit Dapr
 instance. Endpoint, API version, secret reference, name, and status remain
 editable. User email addresses are also unique.
 
+Supported provider kinds and defaults:
+
+| `kind` | default `base_url` | default `api_version` | adapter binary |
+| --- | --- | --- | --- |
+| `anthropic` | `https://api.anthropic.com` | `2023-06-01` | `anthropic-adapter` |
+| `openai-chat` | `https://api.openai.com` | `v1` | `openai-chat-adapter` |
+| `openai-responses` | `https://api.openai.com` | `v1` | `openai-responses-adapter` |
+| `gemini` | `https://generativelanguage.googleapis.com` | `v1beta` | `gemini-adapter` |
+
+`base_url` must be absolute HTTP(S) without credentials, query or fragment.
+`api_version` is a path-safe version token. A provider record is accepted only
+for one of the listed kinds; the adapter verifies its kind again on every IR
+request.
+
 There is no model catalog. Clients address any upstream model as
 `provider-slug/upstream-model`; only the first `/` is structural, so an upstream
 model ID may itself contain `/`.
