@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Albe83/gwai/internal/adapterconfig"
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/ir"
@@ -15,12 +16,12 @@ import (
 
 type adapterProviderResolver struct {
 	provider controlplane.Provider
-	slug     string
+	appID    string
 	err      error
 }
 
-func (resolver *adapterProviderResolver) ResolveProviderBySlug(_ context.Context, slug string) (controlplane.Provider, error) {
-	resolver.slug = slug
+func (resolver *adapterProviderResolver) ResolveProviderByAdapterAppID(_ context.Context, appID string) (controlplane.Provider, error) {
+	resolver.appID = appID
 	return resolver.provider, resolver.err
 }
 
@@ -71,11 +72,14 @@ func TestAdapterCallsVersionedResponsesEndpointWithBearerCredential(t *testing.T
 	secretRef := daprhttp.SecretRef{Store: "secrets", Name: "openai", Key: "api-key"}
 	providers := &adapterProviderResolver{provider: controlplane.Provider{
 		ID: "prv_1", Slug: "openai", Kind: controlplane.ProviderKindOpenAIResponses,
-		BaseURL: upstream.URL, APIVersion: "v1", AdapterAppID: "openai-responses-adapter", SecretRef: secretRef,
+		AdapterAppID: "openai-responses-adapter",
 	}}
 	secrets := &adapterSecretResolver{value: "provider-secret"}
 	handler := NewAdapterHTTPHandler(providers, secrets, upstream.Client(), AdapterConfig{
-		ProviderSlug: "openai", AppID: "openai-responses-adapter", MaxBody: 1 << 20, AppToken: "sidecar-token", MaxOutputTokens: 1024,
+		Runtime: adapterconfig.Config{
+			AppID: "openai-responses-adapter", BaseURL: upstream.URL, APIVersion: "v1", SecretRef: secretRef,
+		},
+		MaxBody: 1 << 20, AppToken: "sidecar-token", MaxOutputTokens: 1024,
 	}, testLogger())
 	request := httptest.NewRequest(http.MethodPost, "/v1/generate", bytes.NewReader(adapterIRRequest(t)))
 	request.Header.Set("Content-Type", "application/json")
@@ -85,8 +89,8 @@ func TestAdapterCallsVersionedResponsesEndpointWithBearerCredential(t *testing.T
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if providers.slug != "openai" || secrets.ref != secretRef {
-		t.Fatalf("unexpected provider/secret resolution: slug=%q ref=%+v", providers.slug, secrets.ref)
+	if providers.appID != "openai-responses-adapter" || secrets.ref != secretRef {
+		t.Fatalf("unexpected provider/secret resolution: appID=%q ref=%+v", providers.appID, secrets.ref)
 	}
 	if captured.Model != "gpt-4.1" || captured.Store || captured.Stream || len(captured.Input) != 1 {
 		t.Fatalf("unexpected provider payload: %+v", captured)
@@ -106,13 +110,14 @@ func TestAdapterRejectsWrongProviderKindAndRoute(t *testing.T) {
 		provider controlplane.Provider
 	}{
 		{name: "kind", provider: controlplane.Provider{ID: "prv_1", Kind: controlplane.ProviderKindOpenAIChat, AdapterAppID: "adapter"}},
+		{name: "provider id", provider: controlplane.Provider{ID: "prv_other", Kind: controlplane.ProviderKindOpenAIResponses, AdapterAppID: "adapter"}},
 		{name: "app id", provider: controlplane.Provider{ID: "prv_1", Kind: controlplane.ProviderKindOpenAIResponses, AdapterAppID: "another-adapter"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			providers := &adapterProviderResolver{provider: test.provider}
 			handler := NewAdapterHTTPHandler(providers, &adapterSecretResolver{}, nil, AdapterConfig{
-				ProviderSlug: "openai", AppID: "adapter", MaxBody: 1 << 20,
+				Runtime: adapterconfig.Config{AppID: "adapter"}, MaxBody: 1 << 20,
 			}, testLogger())
 			request := httptest.NewRequest(http.MethodPost, "/v1/generate", bytes.NewReader(adapterIRRequest(t)))
 			request.Header.Set("Content-Type", "application/json")
@@ -127,7 +132,7 @@ func TestAdapterRejectsWrongProviderKindAndRoute(t *testing.T) {
 
 func TestAdapterRequiresConfiguredSidecarToken(t *testing.T) {
 	handler := NewAdapterHTTPHandler(&adapterProviderResolver{}, &adapterSecretResolver{}, nil, AdapterConfig{
-		ProviderSlug: "openai", AppID: "adapter", MaxBody: 1 << 20, AppToken: "required",
+		Runtime: adapterconfig.Config{AppID: "adapter"}, MaxBody: 1 << 20, AppToken: "required",
 	}, testLogger())
 	request := httptest.NewRequest(http.MethodPost, "/v1/generate", bytes.NewReader(adapterIRRequest(t)))
 	recorder := httptest.NewRecorder()

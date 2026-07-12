@@ -139,10 +139,10 @@ spec:
         protocol: http
   secrets:
     scopes:
-      - storeName: kubernetes
+      - storeName: {{ $adapter.upstream.secretRef.store | quote }}
         defaultAccess: deny
         allowedSecrets:
-          {{- toYaml $adapter.secretNames | nindent 10 }}
+          - {{ $adapter.upstream.secretRef.name | quote }}
   accessControl:
     defaultAction: deny
     trustDomain: public

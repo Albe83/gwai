@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Albe83/gwai/internal/adapterconfig"
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/ir"
@@ -20,7 +21,7 @@ import (
 )
 
 type ProviderResolver interface {
-	ResolveProviderBySlug(context.Context, string) (controlplane.Provider, error)
+	ResolveProviderByAdapterAppID(context.Context, string) (controlplane.Provider, error)
 }
 
 type SecretResolver interface {
@@ -28,8 +29,7 @@ type SecretResolver interface {
 }
 
 type AdapterConfig struct {
-	ProviderSlug           string
-	AppID                  string
+	Runtime                adapterconfig.Config
 	MaxBody                int64
 	AppToken               string
 	DefaultMaxOutputTokens int
@@ -77,12 +77,12 @@ func (h *AdapterHTTPHandler) fail(w http.ResponseWriter, r *http.Request, status
 	platform.WriteProblem(w, r, status, title, detail)
 }
 
-func providerGenerateContentURL(provider controlplane.Provider, upstreamModel string) (string, error) {
-	parsed, err := url.Parse(strings.TrimRight(provider.BaseURL, "/"))
+func providerGenerateContentURL(config adapterconfig.Config, upstreamModel string) (string, error) {
+	parsed, err := url.Parse(config.BaseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return "", fmt.Errorf("invalid Gemini provider base URL")
 	}
-	apiVersion := strings.Trim(provider.APIVersion, "/")
+	apiVersion := config.APIVersion
 	if apiVersion == "" {
 		return "", fmt.Errorf("Gemini provider api_version is required")
 	}
@@ -103,7 +103,7 @@ func (h *AdapterHTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusBadRequest, "Invalid IR request", err.Error(), nil)
 		return
 	}
-	provider, err := h.providers.ResolveProviderBySlug(r.Context(), h.config.ProviderSlug)
+	provider, err := h.providers.ResolveProviderByAdapterAppID(r.Context(), h.config.Runtime.AppID)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, controlplane.ErrNotFound) || errors.Is(err, controlplane.ErrForbidden) {
@@ -116,11 +116,11 @@ func (h *AdapterHTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid provider", "this adapter only accepts Gemini providers", nil)
 		return
 	}
-	if provider.ID != internalRequest.Route.ProviderID || provider.AdapterAppID != h.config.AppID {
+	if provider.ID != internalRequest.Route.ProviderID || provider.AdapterAppID != h.config.Runtime.AppID {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid route", "the request is not addressed to this provider adapter", nil)
 		return
 	}
-	apiKey, err := h.secrets.Get(r.Context(), provider.SecretRef)
+	apiKey, err := h.secrets.Get(r.Context(), h.config.Runtime.SecretRef)
 	if err != nil {
 		h.fail(w, r, http.StatusBadGateway, "Provider credential unavailable", "the provider credential could not be loaded", err)
 		return
@@ -139,7 +139,7 @@ func (h *AdapterHTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusInternalServerError, "Encoding failed", "the provider request could not be encoded", err)
 		return
 	}
-	endpoint, err := providerGenerateContentURL(provider, internalRequest.Route.UpstreamModel)
+	endpoint, err := providerGenerateContentURL(h.config.Runtime, internalRequest.Route.UpstreamModel)
 	if err != nil {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid provider", err.Error(), nil)
 		return

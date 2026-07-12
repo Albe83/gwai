@@ -12,13 +12,13 @@ OPENAI_RESPONSES_PORT=${GWAI_E2E_RESPONSES_PORT:-28083}
 ANTHROPIC_GATEWAY_PORT=${GWAI_E2E_ANTHROPIC_PORT:-28084}
 GEMINI_GATEWAY_PORT=${GWAI_E2E_GEMINI_PORT:-28085}
 PROVIDER_PORT=${GWAI_E2E_PROVIDER_PORT:-28082}
+TMP_DIR=$(mktemp -d)
+RUN_ID="e2e-$(date +%s)-$$"
 PROVIDER_SECRET=${GWAI_E2E_PROVIDER_SECRET:-gwai-anthropic}
-PROVIDER_SLUG=${GWAI_E2E_PROVIDER_SLUG:-anthropic}
+PROVIDER_SLUG=${GWAI_E2E_PROVIDER_SLUG:-provider-${RUN_ID}}
 ADAPTER_APP_ID=${GWAI_E2E_ADAPTER_APP_ID:-gwai-anthropic}
 ADAPTER_DEPLOYMENT=${GWAI_E2E_ADAPTER_DEPLOYMENT:-${RELEASE}-anthropic-primary}
 GO_BIN=${GO:-go}
-TMP_DIR=$(mktemp -d)
-RUN_ID="e2e-$(date +%s)-$$"
 
 provider_pid=""
 control_forward_pid=""
@@ -36,6 +36,7 @@ user_id=""
 provider_id=""
 model_id=""
 model_alias=""
+effective_upstream_model=""
 key_id=""
 independent_key_id=""
 independent_key_name=""
@@ -54,6 +55,13 @@ control_replicas=""
 virtual_key_replicas=""
 control_scaled_down=false
 virtual_key_scaled_down=false
+adapter_config_overridden=false
+adapter_original_base_url=""
+adapter_original_api_version=""
+adapter_original_secret_store=""
+adapter_original_secret_name=""
+adapter_original_secret_key=""
+adapter_original_secret_namespace=""
 
 wait_for_url() {
   local url=$1
@@ -76,6 +84,16 @@ hidden_input_value() {
 process_running() {
   local pid=${1:-}
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+deployment_env_value() {
+  local deployment=$1
+  local name=$2
+  kubectl -n "$NAMESPACE" get "deployment/${deployment}" -o json \
+    | jq -r --arg name "$name" '
+        [.spec.template.spec.containers[0].env[] | select(.name == $name)]
+        | if length == 1 then (.[0].value // "") else error("deployment environment variable is missing or duplicated") end
+      '
 }
 
 start_control_forward() {
@@ -211,6 +229,17 @@ cleanup() {
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
   done
   wait 2>/dev/null
+  if [[ "$adapter_config_overridden" == true ]]; then
+    kubectl -n "$NAMESPACE" set env "deployment/${ADAPTER_DEPLOYMENT}" \
+      "GWAI_PROVIDER_BASE_URL=${adapter_original_base_url}" \
+      "GWAI_PROVIDER_API_VERSION=${adapter_original_api_version}" \
+      "GWAI_PROVIDER_SECRET_STORE=${adapter_original_secret_store}" \
+      "GWAI_PROVIDER_SECRET_NAME=${adapter_original_secret_name}" \
+      "GWAI_PROVIDER_SECRET_KEY=${adapter_original_secret_key}" \
+      "GWAI_PROVIDER_SECRET_NAMESPACE=${adapter_original_secret_namespace}" >/dev/null
+    kubectl -n "$NAMESPACE" rollout status "deployment/${ADAPTER_DEPLOYMENT}" --timeout=60s >/dev/null
+    adapter_config_overridden=false
+  fi
   if [[ "$created_secret" == true ]]; then
     kubectl -n "$NAMESPACE" delete secret "$PROVIDER_SECRET" --ignore-not-found >/dev/null
   fi
@@ -262,6 +291,23 @@ fi
 
 (cd "$ROOT_DIR" && "$GO_BIN" run ./test/e2e/fakeprovider -listen "0.0.0.0:${PROVIDER_PORT}") >"$TMP_DIR/provider.log" 2>&1 &
 provider_pid=$!
+wait_for_url "http://127.0.0.1:${PROVIDER_PORT}/healthz"
+node_ip=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+adapter_original_base_url=$(deployment_env_value "$ADAPTER_DEPLOYMENT" GWAI_PROVIDER_BASE_URL)
+adapter_original_api_version=$(deployment_env_value "$ADAPTER_DEPLOYMENT" GWAI_PROVIDER_API_VERSION)
+adapter_original_secret_store=$(deployment_env_value "$ADAPTER_DEPLOYMENT" GWAI_PROVIDER_SECRET_STORE)
+adapter_original_secret_name=$(deployment_env_value "$ADAPTER_DEPLOYMENT" GWAI_PROVIDER_SECRET_NAME)
+adapter_original_secret_key=$(deployment_env_value "$ADAPTER_DEPLOYMENT" GWAI_PROVIDER_SECRET_KEY)
+adapter_original_secret_namespace=$(deployment_env_value "$ADAPTER_DEPLOYMENT" GWAI_PROVIDER_SECRET_NAMESPACE)
+kubectl -n "$NAMESPACE" set env "deployment/${ADAPTER_DEPLOYMENT}" \
+  "GWAI_PROVIDER_BASE_URL=http://${node_ip}:${PROVIDER_PORT}" \
+  'GWAI_PROVIDER_API_VERSION=2023-06-01' \
+  'GWAI_PROVIDER_SECRET_STORE=kubernetes' \
+  "GWAI_PROVIDER_SECRET_NAME=${PROVIDER_SECRET}" \
+  'GWAI_PROVIDER_SECRET_KEY=api-key' \
+  'GWAI_PROVIDER_SECRET_NAMESPACE=' >/dev/null
+adapter_config_overridden=true
+kubectl -n "$NAMESPACE" rollout status "deployment/${ADAPTER_DEPLOYMENT}" --timeout=60s >/dev/null
 start_control_forward control-forward.log
 start_virtual_key_forward virtual-key-forward.log
 kubectl -n "$NAMESPACE" port-forward "service/${RELEASE}-admin-webui" "${ADMIN_WEBUI_PORT}:8080" >"$TMP_DIR/admin-webui-forward.log" 2>&1 &
@@ -275,7 +321,6 @@ anthropic_forward_pid=$!
 kubectl -n "$NAMESPACE" port-forward "service/${RELEASE}-gemini-gateway" "${GEMINI_GATEWAY_PORT}:8080" >"$TMP_DIR/gemini-forward.log" 2>&1 &
 gemini_forward_pid=$!
 
-wait_for_url "http://127.0.0.1:${PROVIDER_PORT}/healthz"
 wait_for_url "http://127.0.0.1:${CONTROL_PORT}/readyz"
 wait_for_url "http://127.0.0.1:${VIRTUAL_KEY_CONTROL_PORT}/readyz"
 wait_for_url "http://127.0.0.1:${ADMIN_WEBUI_PORT}/readyz"
@@ -286,7 +331,6 @@ wait_for_url "http://127.0.0.1:${GEMINI_GATEWAY_PORT}/readyz"
 
 admin_token=$(kubectl -n "$NAMESPACE" get secret "${RELEASE}-admin" -o jsonpath='{.data.admin-token}' | base64 -d)
 [[ -n "$admin_token" ]] || { echo "admin token Secret is empty" >&2; exit 1; }
-node_ip=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 
 # The browser boundary owns opaque sessions and CSRF; the control-plane bearer
 # token must never be returned in HTML, headers or the cookie jar.
@@ -404,10 +448,8 @@ ui_provider_create_csrf=$(hidden_input_value "$TMP_DIR/ui-new-provider.html" _cs
 status=$(curl -sS -b "$ui_cookie_jar" -D "$TMP_DIR/ui-create-provider.headers" -o "$TMP_DIR/ui-create-provider.body" -w '%{http_code}' \
   -X POST "$ui_base/providers" --data-urlencode "_csrf=${ui_provider_create_csrf}" \
   --data-urlencode "slug=${ui_provider_slug}" --data-urlencode "name=${ui_provider_name}" \
-  --data-urlencode 'kind=anthropic' --data-urlencode "base_url=http://${node_ip}:${PROVIDER_PORT}" \
-  --data-urlencode 'api_version=2023-06-01' --data-urlencode "adapter_app_id=${ui_adapter_app_id}" \
-  --data-urlencode 'secret_store=kubernetes' --data-urlencode "secret_name=${PROVIDER_SECRET}" \
-  --data-urlencode 'secret_key=api-key' --data-urlencode 'status=active')
+  --data-urlencode 'kind=anthropic' --data-urlencode "adapter_app_id=${ui_adapter_app_id}" \
+  --data-urlencode 'status=active')
 [[ "$status" == 303 ]] || { echo "WebUI provider creation failed ($status)" >&2; exit 1; }
 grep -Eiq '^location: /providers' "$TMP_DIR/ui-create-provider.headers"
 ui_provider_id=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/providers" -H "Authorization: Bearer ${admin_token}" \
@@ -437,10 +479,8 @@ ui_provider_name_updated="WebUI provider updated ${RUN_ID}"
 status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-update-provider.body" -w '%{http_code}' \
 	-X POST "$ui_base/providers/${ui_provider_id}" --data-urlencode "_csrf=${ui_provider_csrf}" --data-urlencode "_etag=${ui_provider_etag}" \
   --data-urlencode "slug=${ui_provider_slug}" --data-urlencode "name=${ui_provider_name_updated}" \
-  --data-urlencode 'kind=anthropic' --data-urlencode "base_url=http://${node_ip}:${PROVIDER_PORT}" \
-  --data-urlencode 'api_version=2023-06-01' --data-urlencode "adapter_app_id=${ui_adapter_app_id}" \
-  --data-urlencode 'secret_store=kubernetes' --data-urlencode "secret_name=${PROVIDER_SECRET}" \
-  --data-urlencode 'secret_key=api-key' --data-urlencode 'status=active')
+  --data-urlencode 'kind=anthropic' --data-urlencode "adapter_app_id=${ui_adapter_app_id}" \
+  --data-urlencode 'status=active')
 [[ "$status" == 303 ]] || { echo "WebUI provider update failed ($status)" >&2; exit 1; }
 curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/providers/${ui_provider_id}" -H "Authorization: Bearer ${admin_token}" \
   | jq -e --arg name "$ui_provider_name_updated" '.name == $name and .status == "active"' >/dev/null
@@ -461,7 +501,6 @@ for lifecycle_status in disabled active; do
 done
 
 ui_model_alias="ui-model-${RUN_ID}"
-ui_upstream_model="upstream-ui-${RUN_ID}"
 curl -fsS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-new-model.html" "$ui_base/models/new"
 grep -Fq 'action="/models"' "$TMP_DIR/ui-new-model.html"
 ui_model_create_csrf=$(hidden_input_value "$TMP_DIR/ui-new-model.html" _csrf)
@@ -469,11 +508,13 @@ ui_model_create_csrf=$(hidden_input_value "$TMP_DIR/ui-new-model.html" _csrf)
 status=$(curl -sS -b "$ui_cookie_jar" -D "$TMP_DIR/ui-create-model.headers" -o "$TMP_DIR/ui-create-model.body" -w '%{http_code}' \
   -X POST "$ui_base/models" --data-urlencode "_csrf=${ui_model_create_csrf}" \
   --data-urlencode "alias=${ui_model_alias}" --data-urlencode "provider_id=${ui_provider_id}" \
-  --data-urlencode "upstream_model=${ui_upstream_model}" --data-urlencode 'status=active')
+  --data-urlencode 'upstream_model=' --data-urlencode 'status=active')
 [[ "$status" == 303 ]] || { echo "WebUI model creation failed ($status)" >&2; exit 1; }
 grep -Eiq '^location: /models' "$TMP_DIR/ui-create-model.headers"
 ui_model_id=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/models" -H "Authorization: Bearer ${admin_token}" \
   | jq -er --arg alias "$ui_model_alias" '.data | map(select(.alias == $alias)) | first | .id')
+curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/models/${ui_model_id}" -H "Authorization: Bearer ${admin_token}" \
+  | jq -e '(.upstream_model // "") == ""' >/dev/null
 curl -fsS -b "$ui_cookie_jar" -G --data-urlencode "q=${ui_model_alias}" --data-urlencode 'status=active' \
   --data-urlencode "provider_id=${ui_provider_id}" -o "$TMP_DIR/ui-filter-models.html" "$ui_base/models"
 grep -Fq "href=\"/models/${ui_model_id}/edit\"" "$TMP_DIR/ui-filter-models.html"
@@ -675,11 +716,12 @@ user_id=$(jq -er .id <<<"$user")
 
 provider=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/providers" \
   -H "Authorization: Bearer ${admin_token}" -H 'Content-Type: application/json' \
-  -d "$(jq -nc --arg name "E2E ${RUN_ID}" --arg slug "$PROVIDER_SLUG" --arg app "$ADAPTER_APP_ID" --arg base "http://${node_ip}:${PROVIDER_PORT}" --arg secret "$PROVIDER_SECRET" '{slug:$slug,name:$name,kind:"anthropic",adapter_app_id:$app,base_url:$base,secret_ref:{store:"kubernetes",name:$secret,key:"api-key"}}')")
+  -d "$(jq -nc --arg name "E2E ${RUN_ID}" --arg slug "$PROVIDER_SLUG" --arg app "$ADAPTER_APP_ID" '{slug:$slug,name:$name,kind:"anthropic",adapter_app_id:$app}')")
 provider_id=$(jq -er .id <<<"$provider")
 
 model_alias="model-${RUN_ID}"
 upstream_model="claude-e2e"
+effective_upstream_model="$upstream_model"
 model=$(curl -fsS -D "$TMP_DIR/model-create.headers" "http://127.0.0.1:${CONTROL_PORT}/v1/models" \
   -H "Authorization: Bearer ${admin_token}" -H 'Content-Type: application/json' \
   -d "$(jq -nc --arg alias "$model_alias" --arg provider "$provider_id" --arg upstream "$upstream_model" \
@@ -735,15 +777,20 @@ call_gemini() {
 }
 
 assert_all_gateways() {
-  local completion response
+  local completion response expected_text
+  expected_text="gwai e2e ok (${effective_upstream_model})"
   completion=$(call_openai_chat)
-  jq -e '.object == "chat.completion" and .choices[0].message.content == "gwai e2e ok" and .usage.total_tokens == 11' <<<"$completion" >/dev/null
+  jq -e --arg text "$expected_text" --arg model "$model_alias" \
+    '.object == "chat.completion" and .model == $model and .choices[0].message.content == $text and .usage.total_tokens == 11' <<<"$completion" >/dev/null
   response=$(call_openai_responses)
-  jq -e '.object == "response" and .output[0].content[0].text == "gwai e2e ok" and .usage.total_tokens == 11' <<<"$response" >/dev/null
+  jq -e --arg text "$expected_text" --arg model "$model_alias" \
+    '.object == "response" and .model == $model and .output[0].content[0].text == $text and .usage.total_tokens == 11' <<<"$response" >/dev/null
   response=$(call_anthropic)
-  jq -e '.type == "message" and .content[0].text == "gwai e2e ok" and (.usage.input_tokens + .usage.output_tokens) == 11' <<<"$response" >/dev/null
+  jq -e --arg text "$expected_text" --arg model "$model_alias" \
+    '.type == "message" and .model == $model and .content[0].text == $text and (.usage.input_tokens + .usage.output_tokens) == 11' <<<"$response" >/dev/null
   response=$(call_gemini)
-  jq -e '.candidates[0].content.parts[0].text == "gwai e2e ok" and .usageMetadata.totalTokenCount == 11' <<<"$response" >/dev/null
+  jq -e --arg text "$expected_text" --arg model "$model_alias" \
+    '.modelVersion == $model and .candidates[0].content.parts[0].text == $text and .usageMetadata.totalTokenCount == 11' <<<"$response" >/dev/null
 }
 
 assert_all_gateways_unauthorized() {
@@ -801,6 +848,17 @@ set_model_status() {
       '{alias:$alias,provider_id:$provider,upstream_model:$upstream,status:$status}')"
 }
 
+assert_all_gateways
+
+# Removing the optional upstream override makes the immutable client alias the
+# effective provider model without exposing any provider-native name.
+fallback_model=$(curl -fsS -X PUT "http://127.0.0.1:${CONTROL_PORT}/v1/models/${model_id}" \
+  -H "Authorization: Bearer ${admin_token}" -H 'Content-Type: application/json' \
+  -d "$(jq -nc --arg alias "$model_alias" --arg provider "$provider_id" \
+    '{alias:$alias,provider_id:$provider,upstream_model:"",status:"active"}')")
+jq -e '(.upstream_model // "") == "" and .revision >= 2' <<<"$fallback_model" >/dev/null
+upstream_model=""
+effective_upstream_model="$model_alias"
 assert_all_gateways
 
 # A user status revision is synchronized into the virtual-key domain. Gateways
@@ -866,10 +924,8 @@ outage_csrf=$(hidden_input_value "$TMP_DIR/ui-key-outage-provider-form.html" _cs
 status=$(curl -sS -b "$ui_cookie_jar" -o "$TMP_DIR/ui-key-outage-provider.body" -w '%{http_code}' \
   -X POST "$ui_base/providers" --data-urlencode "_csrf=${outage_csrf}" \
   --data-urlencode "slug=${independent_provider_slug}" --data-urlencode "name=independence ${RUN_ID}" \
-  --data-urlencode 'kind=anthropic' --data-urlencode "base_url=http://${node_ip}:${PROVIDER_PORT}" \
-  --data-urlencode 'api_version=2023-06-01' --data-urlencode "adapter_app_id=gwai-${independent_provider_slug}" \
-  --data-urlencode 'secret_store=kubernetes' --data-urlencode "secret_name=${PROVIDER_SECRET}" \
-  --data-urlencode 'secret_key=api-key' --data-urlencode 'status=active')
+  --data-urlencode 'kind=anthropic' --data-urlencode "adapter_app_id=gwai-${independent_provider_slug}" \
+  --data-urlencode 'status=active')
 [[ "$status" == 303 ]] || { echo "WebUI provider creation failed during key-control outage ($status)" >&2; exit 1; }
 independent_provider_id=$(curl -fsS "http://127.0.0.1:${CONTROL_PORT}/v1/providers" -H "Authorization: Bearer ${admin_token}" \
   | jq -er --arg slug "$independent_provider_slug" '.data | map(select(.slug == $slug)) | first | .id')

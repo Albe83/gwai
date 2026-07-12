@@ -68,8 +68,9 @@ projections.
 
 ## Providers and routing
 
-A provider contains a unique lowercase DNS-label `slug` and an explicit Dapr
-`adapter_app_id`:
+A Provider is the GWAI-owned binding to an adapter that a cluster administrator
+has already deployed. Its writable contract contains only `slug`, `name`,
+`kind`, `adapter_app_id` and `status`:
 
 ```json
 {
@@ -77,45 +78,42 @@ A provider contains a unique lowercase DNS-label `slug` and an explicit Dapr
   "name": "Anthropic primary",
   "kind": "anthropic",
   "adapter_app_id": "gwai-anthropic",
-  "base_url": "https://api.anthropic.com",
-  "api_version": "2023-06-01",
-  "secret_ref": {
-    "store": "kubernetes",
-    "name": "gwai-anthropic",
-    "key": "api-key"
-  }
+  "status": "active"
 }
 ```
 
-`slug` and `adapter_app_id` are unique, immutable, and must match one Helm adapter
-instance. Endpoint, API version, secret reference, name, and status remain
-editable. User email addresses are also unique.
+`slug` and `adapter_app_id` are unique and immutable. The app ID must equal the
+Dapr app ID assigned to one logical adapter workload; all replicas of that
+workload share the identity. `name`, `kind` and `status` remain editable,
+although `kind` must continue to match the adapter binary: an adapter verifies
+the Provider ID, kind and app ID on every IR request and fails closed on a
+mismatch. User email addresses are also unique.
 
-Supported provider kinds and defaults:
+Supported Provider kinds and their matching adapter binaries are:
 
-| `kind` | default `base_url` | default `api_version` | adapter binary |
-| --- | --- | --- | --- |
-| `anthropic` | `https://api.anthropic.com` | `2023-06-01` | `anthropic-adapter` |
-| `openai-chat` | `https://api.openai.com` | `v1` | `openai-chat-adapter` |
-| `openai-responses` | `https://api.openai.com` | `v1` | `openai-responses-adapter` |
-| `gemini` | `https://generativelanguage.googleapis.com` | `v1beta` | `gemini-adapter` |
+| `kind` | adapter binary |
+| --- | --- |
+| `anthropic` | `anthropic-adapter` |
+| `openai-chat` | `openai-chat-adapter` |
+| `openai-responses` | `openai-responses-adapter` |
+| `gemini` | `gemini-adapter` |
 
-`base_url` must be absolute HTTP(S) without credentials, query or fragment.
-`api_version` is a path-safe version token. A provider record is accepted only
-for one of the listed kinds; the adapter verifies its kind again on every IR
-request.
+The upstream base URL, API version and Secret Store reference are deliberately
+not Provider fields. They belong to the adapter deployment and cannot be read
+or changed through the GWAI Admin API or WebUI. Credential material likewise
+never enters Provider state.
 
 ## Models
 
-A Model is the stable, client-facing route from an alias to one Provider and
-one provider-native model identifier:
+A Model is the stable, client-facing route from an alias to one Provider. Its
+provider-native model identifier is optional:
 
 ```json
 {
   "id": "mdl_...",
   "alias": "claude-sonnet",
   "provider_id": "prv_...",
-  "upstream_model": "claude-sonnet-4-6",
+  "upstream_model": "",
   "status": "active",
   "revision": 1,
   "created_at": "2026-07-12T12:00:00Z",
@@ -128,7 +126,10 @@ protocol's `model` field or path. They contain 1–200 ASCII letters, digits,
 `.`, `_`, `:`, `/` or `-`, start with a letter or digit, and are matched
 exactly. `provider_id` and `upstream_model` are editable; moving a Model changes
 its selected Provider without introducing a gateway/provider protocol coupling.
-The upstream value contains 1–300 bytes and cannot contain CR, LF or NUL.
+When `upstream_model` is empty or omitted on input, the gateway sends the public
+`alias` upstream. A non-empty override contains 1–300 bytes and cannot contain
+CR, LF or NUL. This permits an administrator to expose a stable or masked alias
+while targeting a differently named provider model.
 
 Creation and activation require an active Provider. At inference time the
 Model, its synchronized model subject and its Provider must all be active.
@@ -208,7 +209,13 @@ completes an idempotent fence followed by canonical removal.
 
 Neither control plane exposes an authorization or route-resolution API to the
 data plane. Gateways read key/user/model-subject state plus Model/Provider state
-directly; adapters construct the narrower Provider-only runtime view.
+directly. A gateway resolves alias → Model → Provider, selects the effective
+upstream name (`upstream_model` or the alias fallback), and invokes only the
+Provider's `adapter_app_id`. The selected adapter looks up the Provider by its
+own app ID and verifies the route, but takes its upstream connection and Secret
+Store reference exclusively from deployment configuration. Gateways translate
+the response back with the requested public alias, preventing an upstream model
+name from leaking through any supported client protocol.
 
 The resource service invokes four non-public virtual-key operations through Dapr:
 
@@ -229,3 +236,9 @@ contain qualified strings instead of required Model IDs and have no per-model
 reference indexes or model-subject projections. There is no permissive runtime
 fallback and no automatic migration. Upgrade using a fresh installation or
 explicitly reset and reprovision users, providers, Models and virtual keys.
+
+The adapter-connection ownership change is a separate Helm values migration:
+move `providerSlug` and `secretNames` from every `providerAdapters` entry to its
+new `upstream.baseURL`, `upstream.apiVersion` and `upstream.secretRef` fields.
+Existing Provider state no longer supplies these settings; verify that each
+persisted `adapter_app_id` still matches its deployed adapter before rollout.

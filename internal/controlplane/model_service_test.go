@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/state"
 )
 
@@ -53,8 +52,7 @@ func newModelTestService(t *testing.T) (*ResourceService, *ProviderRepository, *
 	service.now = func() time.Time { return time.Date(2026, 7, 12, 16, 0, 0, 0, time.UTC) }
 	provider, err := service.CreateProvider(context.Background(), ProviderInput{
 		Slug: "anthropic", Name: "Anthropic", Kind: ProviderKindAnthropic, AdapterAppID: "anthropic-adapter",
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic", Key: "api-key"},
-		Status:    StatusActive,
+		Status: StatusActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +88,6 @@ func TestModelServiceLifecycleAndProviderRestriction(t *testing.T) {
 
 	other, err := service.CreateProvider(ctx, ProviderInput{
 		Slug: "backup", Name: "Backup", Kind: ProviderKindAnthropic, AdapterAppID: "backup-adapter",
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "backup", Key: "api-key"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +142,7 @@ func TestActiveModelRequiresActiveProvider(t *testing.T) {
 	service, _, _, _, _ := newModelTestService(t)
 	disabled, err := service.CreateProvider(context.Background(), ProviderInput{
 		Slug: "disabled", Name: "Disabled", Kind: ProviderKindAnthropic, AdapterAppID: "disabled-adapter",
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "disabled"}, Status: StatusDisabled,
+		Status: StatusDisabled,
 	})
 	if err != nil {
 		t.Fatal(err)

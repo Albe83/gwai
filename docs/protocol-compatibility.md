@@ -3,6 +3,8 @@
 gwai exposes four unary client APIs and can target four provider APIs. Client
 and provider selection are independent: a Model alias resolves a catalog record
 and then the Provider whose `adapter_app_id` receives the canonical IR.
+The adapter deployment, not the Provider record, supplies the upstream base
+URL, API version and Secret Store reference used by the requests below.
 
 ## Protocol endpoints
 
@@ -73,4 +75,6 @@ IR normalizes completion states to `stop`, `length`, `tool_calls` or
 `content_filter`. Each gateway converts those values back to its public API.
 Provider response IDs remain diagnostic metadata; the public gateway creates
 an ID in its own protocol namespace. Usage always reports total input and
-output tokens, with cached-input detail where the client API supports it.
+output tokens, with cached-input detail where the client API supports it. Each
+gateway also reports the Model alias requested by the client rather than an
+upstream model name returned by the provider.

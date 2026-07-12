@@ -3,17 +3,15 @@ package controlplane
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
-
-	"github.com/Albe83/gwai/internal/daprhttp"
 )
 
 func TestModelHTTPCRUDUsesStrongPreconditionsAndRestrictsProviderDelete(t *testing.T) {
 	resources, _ := newControlPlaneHandlers()
 	providerInput := ProviderInput{
 		Slug: "anthropic", Name: "Anthropic", Kind: ProviderKindAnthropic, AdapterAppID: "anthropic-adapter",
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic", Key: "api-key"},
-		Status:    StatusActive,
+		Status: StatusActive,
 	}
 	providerResponse := controlRequest(resources, http.MethodPost, "/v1/providers", "admin-token", providerInput)
 	if providerResponse.Code != http.StatusCreated {
@@ -102,5 +100,47 @@ func TestModelHTTPCRUDUsesStrongPreconditionsAndRestrictsProviderDelete(t *testi
 	}
 	if response := controlRequestIfMatch(resources, http.MethodDelete, "/v1/providers/"+provider.ID, "admin-token", providerTag, nil); response.Code != http.StatusNoContent {
 		t.Fatalf("provider delete after model removal returned %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestProviderAPIOmitsAdapterConnectionConfigAndModelAllowsNoUpstreamOverride(t *testing.T) {
+	resources, _ := newControlPlaneHandlers()
+	providerResponse := controlRequest(resources, http.MethodPost, "/v1/providers", "admin-token", ProviderInput{
+		Slug: "openai", Name: "OpenAI", Kind: ProviderKindOpenAIResponses,
+		AdapterAppID: "openai-adapter", Status: StatusActive,
+	})
+	if providerResponse.Code != http.StatusCreated {
+		t.Fatalf("create provider returned %d: %s", providerResponse.Code, providerResponse.Body.String())
+	}
+	for _, removed := range []string{`"base_url"`, `"api_version"`, `"secret_ref"`} {
+		if strings.Contains(providerResponse.Body.String(), removed) {
+			t.Fatalf("provider response retained removed field %s: %s", removed, providerResponse.Body.String())
+		}
+	}
+	var provider Provider
+	if err := json.Unmarshal(providerResponse.Body.Bytes(), &provider); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyResponse := controlRequest(resources, http.MethodPost, "/v1/providers", "admin-token", map[string]any{
+		"slug": "legacy", "name": "Legacy", "kind": ProviderKindOpenAIResponses,
+		"adapter_app_id": "legacy-adapter", "base_url": "https://api.openai.com",
+	})
+	if legacyResponse.Code != http.StatusBadRequest {
+		t.Fatalf("legacy provider connection field returned %d: %s", legacyResponse.Code, legacyResponse.Body.String())
+	}
+
+	modelResponse := controlRequest(resources, http.MethodPost, "/v1/models", "admin-token", map[string]any{
+		"alias": "public-model", "provider_id": provider.ID,
+	})
+	if modelResponse.Code != http.StatusCreated {
+		t.Fatalf("create model without upstream override returned %d: %s", modelResponse.Code, modelResponse.Body.String())
+	}
+	var model Model
+	if err := json.Unmarshal(modelResponse.Body.Bytes(), &model); err != nil {
+		t.Fatal(err)
+	}
+	if model.UpstreamModel != "" {
+		t.Fatalf("model upstream override = %q, want empty", model.UpstreamModel)
 	}
 }

@@ -1,10 +1,6 @@
 package controlplane
 
-import (
-	"time"
-
-	"github.com/Albe83/gwai/internal/daprhttp"
-)
+import "time"
 
 type Status string
 
@@ -31,17 +27,14 @@ type User struct {
 }
 
 type Provider struct {
-	ID           string             `json:"id"`
-	Slug         string             `json:"slug"`
-	Name         string             `json:"name"`
-	Kind         string             `json:"kind"`
-	BaseURL      string             `json:"base_url"`
-	APIVersion   string             `json:"api_version"`
-	AdapterAppID string             `json:"adapter_app_id"`
-	SecretRef    daprhttp.SecretRef `json:"secret_ref"`
-	Status       Status             `json:"status"`
-	CreatedAt    time.Time          `json:"created_at"`
-	UpdatedAt    time.Time          `json:"updated_at"`
+	ID           string    `json:"id"`
+	Slug         string    `json:"slug"`
+	Name         string    `json:"name"`
+	Kind         string    `json:"kind"`
+	AdapterAppID string    `json:"adapter_app_id"`
+	Status       Status    `json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Model is the stable, client-facing routing resource between virtual-key

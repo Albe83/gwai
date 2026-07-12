@@ -70,8 +70,12 @@ func (r *GatewayRuntime) ResolveRoute(ctx context.Context, requestedModel string
 	if err != nil {
 		return Route{}, err
 	}
+	upstreamModel := model.UpstreamModel
+	if upstreamModel == "" {
+		upstreamModel = model.Alias
+	}
 	return Route{
-		ModelID: model.ID, Alias: model.Alias, ProviderID: provider.ID, UpstreamModel: model.UpstreamModel,
+		ModelID: model.ID, Alias: model.Alias, ProviderID: provider.ID, UpstreamModel: upstreamModel,
 		AdapterAppID: provider.AdapterAppID,
 	}, nil
 }
@@ -112,12 +116,8 @@ func NewProviderRuntime(providers *ProviderRepository) *ProviderRuntime {
 	return &ProviderRuntime{providers: providers}
 }
 
-func (r *ProviderRuntime) ResolveProviderBySlug(ctx context.Context, slug string) (Provider, error) {
-	return resolveActiveProvider(ctx, r.providers, slug)
-}
-
-func resolveActiveProvider(ctx context.Context, providers *ProviderRepository, slug string) (Provider, error) {
-	provider, err := providers.GetProviderBySlug(ctx, slug)
+func (r *ProviderRuntime) ResolveProviderByAdapterAppID(ctx context.Context, appID string) (Provider, error) {
+	provider, err := r.providers.GetProviderByAdapterAppID(ctx, appID)
 	if err != nil {
 		return Provider{}, err
 	}

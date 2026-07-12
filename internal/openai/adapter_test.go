@@ -10,20 +10,29 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Albe83/gwai/internal/adapterconfig"
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/ir"
 )
 
-type openAIProviderResolver struct{ provider controlplane.Provider }
+type openAIProviderResolver struct {
+	provider controlplane.Provider
+	appID    string
+}
 
-func (r openAIProviderResolver) ResolveProviderBySlug(_ context.Context, _ string) (controlplane.Provider, error) {
+func (r *openAIProviderResolver) ResolveProviderByAdapterAppID(_ context.Context, appID string) (controlplane.Provider, error) {
+	r.appID = appID
 	return r.provider, nil
 }
 
-type openAISecretResolver struct{ value string }
+type openAISecretResolver struct {
+	value string
+	ref   daprhttp.SecretRef
+}
 
-func (r openAISecretResolver) Get(_ context.Context, _ daprhttp.SecretRef) (string, error) {
+func (r *openAISecretResolver) Get(_ context.Context, ref daprhttp.SecretRef) (string, error) {
+	r.ref = ref
 	return r.value, nil
 }
 
@@ -48,10 +57,16 @@ func TestAdapterHTTPHandlerCallsConfiguredOpenAIChatProvider(t *testing.T) {
 	defer upstream.Close()
 	provider := controlplane.Provider{
 		ID: "prv_1", Slug: "openai", Kind: controlplane.ProviderKindOpenAIChat,
-		BaseURL: upstream.URL, APIVersion: "v1", AdapterAppID: "openai-chat-adapter",
+		AdapterAppID: "openai-chat-adapter",
 	}
-	handler := NewAdapterHTTPHandler(openAIProviderResolver{provider}, openAISecretResolver{"sk-test"}, upstream.Client(), AdapterConfig{
-		ProviderSlug: "openai", AppID: "openai-chat-adapter", MaxBody: 1 << 20, AppToken: "sidecar-token",
+	secretRef := daprhttp.SecretRef{Store: "secrets", Name: "openai", Key: "api-key"}
+	providers := &openAIProviderResolver{provider: provider}
+	secrets := &openAISecretResolver{value: "sk-test"}
+	handler := NewAdapterHTTPHandler(providers, secrets, upstream.Client(), AdapterConfig{
+		Runtime: adapterconfig.Config{
+			AppID: "openai-chat-adapter", BaseURL: upstream.URL, APIVersion: "v1", SecretRef: secretRef,
+		},
+		MaxBody: 1 << 20, AppToken: "sidecar-token",
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	input := ir.Request{
 		Version: ir.Version, ID: "req_1", Route: ir.Route{ProviderID: "prv_1", UpstreamModel: "gpt-test"},
@@ -71,6 +86,9 @@ func TestAdapterHTTPHandlerCallsConfiguredOpenAIChatProvider(t *testing.T) {
 	}
 	if received.Model != "gpt-test" || len(received.Messages) != 1 {
 		t.Fatalf("unexpected upstream request: %+v", received)
+	}
+	if providers.appID != "openai-chat-adapter" || secrets.ref != secretRef {
+		t.Fatalf("unexpected runtime resolution: appID=%q ref=%+v", providers.appID, secrets.ref)
 	}
 	var output ir.Response
 	if err := json.NewDecoder(recorder.Body).Decode(&output); err != nil {

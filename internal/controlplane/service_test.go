@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/state"
 )
 
@@ -77,7 +76,6 @@ func provisionTestRoute(t *testing.T, planes testControlPlanes) (User, Provider,
 	provider, err := planes.resources.CreateProvider(ctx, ProviderInput{
 		Slug: "anthropic-primary", Name: "Anthropic primary", Kind: ProviderKindAnthropic,
 		AdapterAppID: "gwai-anthropic-primary",
-		SecretRef:    daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic", Key: "api-key"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +147,58 @@ func TestSplitControlPlaneLifecycleAndAuthorization(t *testing.T) {
 	}
 }
 
+func TestModelWithoutUpstreamOverrideUsesAliasAtRuntime(t *testing.T) {
+	planes := newTestControlPlanes()
+	ctx := context.Background()
+	provider, err := planes.resources.CreateProvider(ctx, ProviderInput{
+		Slug: "openai", Name: "OpenAI", Kind: ProviderKindOpenAIResponses, AdapterAppID: "openai-adapter",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := planes.resources.CreateModel(ctx, ModelInput{
+		Alias: "public-model", ProviderID: provider.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.UpstreamModel != "" {
+		t.Fatalf("optional upstream override was persisted as %q", model.UpstreamModel)
+	}
+	route, err := planes.gateway.ResolveRoute(ctx, model.Alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.UpstreamModel != model.Alias || route.AdapterAppID != provider.AdapterAppID {
+		t.Fatalf("route without override = %+v", route)
+	}
+
+	model, err = planes.resources.UpdateModel(ctx, model.ID, ModelInput{
+		Alias: model.Alias, ProviderID: provider.ID, UpstreamModel: "real-model", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err = planes.gateway.ResolveRoute(ctx, model.Alias)
+	if err != nil || route.UpstreamModel != "real-model" {
+		t.Fatalf("route with override = %+v, %v", route, err)
+	}
+
+	model, err = planes.resources.UpdateModel(ctx, model.ID, ModelInput{
+		Alias: model.Alias, ProviderID: provider.ID, Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.UpstreamModel != "" {
+		t.Fatalf("cleared upstream override was persisted as %q", model.UpstreamModel)
+	}
+	route, err = planes.gateway.ResolveRoute(ctx, model.Alias)
+	if err != nil || route.UpstreamModel != model.Alias {
+		t.Fatalf("route after clearing override = %+v, %v", route, err)
+	}
+}
+
 func TestModelLifecycleRevokesRoutingAndRestrictsDeletion(t *testing.T) {
 	planes := newTestControlPlanes()
 	ctx := context.Background()
@@ -184,9 +234,8 @@ func TestModelLifecycleRevokesRoutingAndRestrictsDeletion(t *testing.T) {
 		t.Fatalf("reactivated model did not restore authorization: %v", err)
 	}
 	providerInput := ProviderInput{
-		Slug: provider.Slug, Name: provider.Name, Kind: provider.Kind, BaseURL: provider.BaseURL,
-		APIVersion: provider.APIVersion, AdapterAppID: provider.AdapterAppID, SecretRef: provider.SecretRef,
-		Status: StatusDisabled,
+		Slug: provider.Slug, Name: provider.Name, Kind: provider.Kind,
+		AdapterAppID: provider.AdapterAppID, Status: StatusDisabled,
 	}
 	if _, err := planes.resources.UpdateProvider(ctx, provider.ID, providerInput); err != nil {
 		t.Fatal(err)
@@ -320,7 +369,6 @@ func TestFailedUserProjectionStaysFailClosedAndPUTRepairsIt(t *testing.T) {
 	}
 	provider, err := resources.CreateProvider(context.Background(), ProviderInput{
 		Slug: "provider", Name: "Provider", Kind: ProviderKindAnthropic, AdapterAppID: "provider-adapter",
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "provider"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -426,13 +474,11 @@ func TestServicesRejectDuplicateProviderAndDisallowedModel(t *testing.T) {
 	user, provider, model := provisionTestRoute(t, planes)
 	if _, err := planes.resources.CreateProvider(ctx, ProviderInput{
 		Slug: provider.Slug, Name: "Duplicate", Kind: ProviderKindAnthropic, AdapterAppID: "another-adapter",
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "other"},
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected duplicate slug conflict, got %v", err)
 	}
 	if _, err := planes.resources.CreateProvider(ctx, ProviderInput{
 		Slug: "another-provider", Name: "Duplicate app ID", Kind: ProviderKindAnthropic, AdapterAppID: provider.AdapterAppID,
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "other"},
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected duplicate app ID conflict, got %v", err)
 	}
@@ -463,9 +509,8 @@ func TestProviderSlugAndAdapterAppIDAreImmutable(t *testing.T) {
 	planes := newTestControlPlanes()
 	_, provider, _ := provisionTestRoute(t, planes)
 	input := ProviderInput{
-		Slug: provider.Slug, Name: provider.Name, Kind: provider.Kind, BaseURL: provider.BaseURL,
-		APIVersion: provider.APIVersion, AdapterAppID: provider.AdapterAppID, SecretRef: provider.SecretRef,
-		Status: provider.Status,
+		Slug: provider.Slug, Name: provider.Name, Kind: provider.Kind,
+		AdapterAppID: provider.AdapterAppID, Status: provider.Status,
 	}
 	input.Slug = "renamed"
 	if _, err := planes.resources.UpdateProvider(context.Background(), provider.ID, input); err == nil {
@@ -489,41 +534,23 @@ func TestServiceRejectsDuplicateUserEmailCaseInsensitively(t *testing.T) {
 	}
 }
 
-func TestServiceRejectsAmbiguousProviderURL(t *testing.T) {
-	planes := newTestControlPlanes()
-	_, err := planes.resources.CreateProvider(context.Background(), ProviderInput{
-		Slug: "anthropic", Name: "Anthropic", Kind: ProviderKindAnthropic, AdapterAppID: "anthropic-adapter",
-		BaseURL:   "https://user@example.com/api?token=secret",
-		SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic"},
-	})
-	var validation *ValidationError
-	if !errors.As(err, &validation) || validation.Field != "base_url" {
-		t.Fatalf("expected base_url validation error, got %v", err)
-	}
-}
-
 func TestNormalizeProviderInputSupportsEveryAdapterKind(t *testing.T) {
-	tests := []struct {
-		kind       string
-		baseURL    string
-		apiVersion string
-	}{
-		{ProviderKindAnthropic, "https://api.anthropic.com", "2023-06-01"},
-		{ProviderKindOpenAIChat, "https://api.openai.com", "v1"},
-		{ProviderKindOpenAIResponses, "https://api.openai.com", "v1"},
-		{ProviderKindGemini, "https://generativelanguage.googleapis.com", "v1beta"},
+	tests := []string{
+		ProviderKindAnthropic,
+		ProviderKindOpenAIChat,
+		ProviderKindOpenAIResponses,
+		ProviderKindGemini,
 	}
-	for _, test := range tests {
-		t.Run(test.kind, func(t *testing.T) {
+	for _, kind := range tests {
+		t.Run(kind, func(t *testing.T) {
 			result, err := normalizeProviderInput(ProviderInput{
-				Slug: "provider", Name: "Provider", Kind: test.kind, AdapterAppID: "provider-adapter",
-				SecretRef: daprhttp.SecretRef{Store: "kubernetes", Name: "provider-key"},
+				Slug: "provider", Name: "Provider", Kind: kind, AdapterAppID: "provider-adapter",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.BaseURL != test.baseURL || result.APIVersion != test.apiVersion {
-				t.Fatalf("unexpected defaults: %+v", result)
+			if result.Kind != kind || result.Status != StatusActive {
+				t.Fatalf("unexpected normalized provider: %+v", result)
 			}
 		})
 	}

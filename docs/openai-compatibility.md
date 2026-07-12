@@ -11,10 +11,12 @@ error envelope.
 
 `model` is a globally unique, immutable Model alias. The gateway resolves that
 catalog record, verifies that both the Model and its Provider are active, then
-invokes the Provider's configured `adapter_app_id`. Only the configured
-`upstream_model` enters the provider-neutral IR; provider endpoints and
-credentials remain outside it. The public response continues to identify the
-requested alias.
+invokes the Provider's configured `adapter_app_id`. A non-empty
+`upstream_model` override enters the provider-neutral IR; otherwise the gateway
+uses the public alias. Provider endpoints, API versions, Secret references and
+credentials are owned by the adapter deployment and remain outside Provider
+state and IR. The public response continues to identify the requested alias,
+even when the upstream provider returns its real model name.
 
 A virtual key can use only the non-empty set of Model IDs assigned to it. Model
 aliases are never interpreted as provider protocol names, so adding or moving a

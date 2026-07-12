@@ -186,7 +186,6 @@
 {{- end }}
 {{- end }}
 {{- $names := dict }}
-{{- $slugs := dict }}
 {{- range $index, $adapter := .Values.providerAdapters }}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $adapter.name) }}
 {{- fail (printf "providerAdapters[%d].name must be a lowercase DNS label" $index) }}
@@ -198,13 +197,6 @@
 {{- if not (has $adapter.kind (list "anthropic" "openai-chat" "openai-responses" "gemini")) }}
 {{- fail (printf "providerAdapters[%d].kind is unsupported" $index) }}
 {{- end }}
-{{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $adapter.providerSlug) }}
-{{- fail (printf "providerAdapters[%d].providerSlug must be a lowercase DNS label" $index) }}
-{{- end }}
-{{- if hasKey $slugs $adapter.providerSlug }}
-{{- fail (printf "providerAdapters[%d].providerSlug must be unique" $index) }}
-{{- end }}
-{{- $_ := set $slugs $adapter.providerSlug true }}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?$" $adapter.appID) }}
 {{- fail (printf "providerAdapters[%d].appID must be a valid lowercase Dapr app ID" $index) }}
 {{- end }}
@@ -231,7 +223,22 @@
 {{- fail (printf "providerAdapters[%d].maxOutputTokens must be zero or at least defaultMaxOutputTokens" $index) }}
 {{- end }}
 {{- end }}
-{{- if eq (len $adapter.secretNames) 0 }}
-{{- fail (printf "providerAdapters[%d].secretNames must contain at least one Secret" $index) }}
+{{- if not (hasKey $adapter "upstream") }}
+{{- fail (printf "providerAdapters[%d].upstream is required" $index) }}
+{{- end }}
+{{- if not (regexMatch "^https?://[^[:space:]]+$" $adapter.upstream.baseURL) }}
+{{- fail (printf "providerAdapters[%d].upstream.baseURL must be an absolute HTTP(S) URL" $index) }}
+{{- end }}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" $adapter.upstream.apiVersion) }}
+{{- fail (printf "providerAdapters[%d].upstream.apiVersion must be a valid API version token" $index) }}
+{{- end }}
+{{- if not (hasKey $adapter.upstream "secretRef") }}
+{{- fail (printf "providerAdapters[%d].upstream.secretRef is required" $index) }}
+{{- end }}
+{{- if or (not $adapter.upstream.secretRef.store) (not $adapter.upstream.secretRef.name) (not $adapter.upstream.secretRef.key) }}
+{{- fail (printf "providerAdapters[%d].upstream.secretRef store, name and key are required" $index) }}
+{{- end }}
+{{- if and $adapter.upstream.secretRef.namespace (not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $adapter.upstream.secretRef.namespace)) }}
+{{- fail (printf "providerAdapters[%d].upstream.secretRef.namespace must be empty or a lowercase DNS label" $index) }}
 {{- end }}
 {{- end }}

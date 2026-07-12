@@ -1,5 +1,6 @@
 {{- $root := . -}}
 {{- range $index, $adapter := .Values.providerAdapters }}
+{{- $secretNamespace := default $root.Release.Namespace $adapter.upstream.secretRef.namespace }}
 {{- if $index }}
 ---
 {{- end }}
@@ -7,19 +8,21 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "gwai.adapterSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
+  namespace: {{ $secretNamespace | quote }}
   labels:
     {{- include "gwai.labels" $root | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames:
-      {{- toYaml $adapter.secretNames | nindent 6 }}
+      - {{ $adapter.upstream.secretRef.name | quote }}
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ include "gwai.adapterSecretsRoleName" (dict "root" $root "adapter" $adapter) }}
+  namespace: {{ $secretNamespace | quote }}
   labels:
     {{- include "gwai.labels" $root | nindent 4 }}
 subjects:

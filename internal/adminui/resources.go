@@ -295,8 +295,7 @@ func (s *server) listProviders(w http.ResponseWriter, r *http.Request, session s
 func (s *server) newProvider(w http.ResponseWriter, _ *http.Request, session sessionSnapshot) {
 	data := s.basePage(session, "Create provider", "providers")
 	data.ProviderForm = &providerForm{
-		Kind: controlplane.ProviderKindAnthropic, SecretStore: "kubernetes",
-		Status: string(controlplane.StatusActive),
+		Kind: controlplane.ProviderKindAnthropic, Status: string(controlplane.StatusActive),
 	}
 	s.views.render(w, http.StatusOK, "provider-form", data)
 }
@@ -304,10 +303,7 @@ func (s *server) newProvider(w http.ResponseWriter, _ *http.Request, session ses
 func providerFormFromRequest(r *http.Request) providerForm {
 	return providerForm{
 		Slug: formString(r, "slug"), Name: formString(r, "name"), Kind: formString(r, "kind"),
-		BaseURL: formString(r, "base_url"), APIVersion: formString(r, "api_version"),
-		AdapterAppID: formString(r, "adapter_app_id"), SecretStore: formString(r, "secret_store"),
-		SecretName: formString(r, "secret_name"), SecretKey: formString(r, "secret_key"),
-		SecretNamespace: formString(r, "secret_namespace"), Status: statusValue(r.PostForm.Get("status")),
+		AdapterAppID: formString(r, "adapter_app_id"), Status: statusValue(r.PostForm.Get("status")),
 	}
 }
 
@@ -328,7 +324,7 @@ func (s *server) createProvider(w http.ResponseWriter, r *http.Request, session 
 		s.renderOperationError(w, session, data, "provider-form", err)
 		return
 	}
-	s.flashRedirect(w, r, session, "/providers", "success", "Provider registered. Ensure the matching adapter and Secret are deployed.")
+	s.flashRedirect(w, r, session, "/providers", "success", "Provider registered. Ensure the matching adapter is deployed.")
 }
 
 func (s *server) editProvider(w http.ResponseWriter, r *http.Request, session sessionSnapshot) {

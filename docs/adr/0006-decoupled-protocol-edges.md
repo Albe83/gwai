@@ -1,6 +1,6 @@
 # ADR 0006: Decoupled gateway and provider protocol edges
 
-- Status: accepted
+- Status: accepted; amended by ADR 0010
 - Date: 2026-07-12
 
 ## Context
@@ -18,6 +18,10 @@ versioned IR. It authorizes the virtual key and resolves an opaque
 Each provider adapter exposes only internal `POST /v1/generate`, validates the
 IR route against its configured provider ID, kind and own app ID, loads its
 scoped credential, and translates IR to/from one provider API.
+
+ADR 0010 defines the configuration source precisely: the adapter resolves its
+Provider binding by its own Dapr app ID, while its upstream endpoint, API
+version and Secret reference come only from deployment configuration.
 
 There are no direct OpenAI↔Anthropic↔Gemini converters, no provider HTTP clients
 inside gateways and no client-protocol branching inside adapters. Dapr service

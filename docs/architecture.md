@@ -28,7 +28,7 @@ IR translations rather than `C × P` direct converters.
 | `gwai-openai-responses-gateway` | OpenAI Responses | virtual-key state, provider state, selected adapter app ID |
 | `gwai-anthropic-gateway` | Anthropic Messages | virtual-key state, provider state, selected adapter app ID |
 | `gwai-gemini-gateway` | Gemini GenerateContent | virtual-key state, provider state, selected adapter app ID |
-| Provider adapter instance | Internal IR only | provider state, Secret Store, one provider HTTP API |
+| Provider adapter instance | Internal IR only | Provider binding by own app ID, deployment-owned connection, Secret Store, one provider HTTP API |
 
 No gateway imports provider-adapter code or is statically paired with an
 adapter. It invokes only the protocol-neutral `/v1/generate` contract at the
@@ -39,11 +39,15 @@ translation directions remain separate and never call each other.
 ## Routing and request sequence
 
 Each Model has a globally unique immutable client alias, a Provider ID and an
-upstream model identifier. Each Provider has an immutable DNS-label `slug`, one
-of four `kind` values and an explicit `adapter_app_id`. Helm creates one workload
-and Dapr identity per provider account. The persisted and deployed app IDs must
-match. Moving a Model to another Provider changes the selected adapter without
-changing the public alias or introducing a protocol-specific gateway path.
+optional upstream model override. An empty override means that the alias is also
+the upstream model name. Each Provider contains GWAI routing metadata only: an
+immutable DNS-label `slug`, one of four `kind` values, an explicit immutable
+`adapter_app_id`, a name and status. The cluster administrator creates one
+adapter workload and Dapr identity per provider account and supplies its base
+URL, API version and Secret Store reference at deployment time. The GWAI
+administrator registers a Provider whose kind and app ID match that deployment.
+Moving a Model to another Provider changes the selected adapter without changing
+the public alias or introducing a protocol-specific gateway path.
 
 ```mermaid
 sequenceDiagram
@@ -59,26 +63,28 @@ sequenceDiagram
     G->>K: read key and owner subject
     K-->>G: key authorization state + Model-ID allowlist
     G->>R: resolve Model alias
-    R-->>G: Model ID, Provider ID, upstream model
+    R-->>G: Model ID, Provider ID, optional upstream override
     G->>K: read matching Model subject
     K-->>G: fail-closed Model lifecycle state
     G->>R: resolve active Provider by ID
     R-->>G: adapter app ID
-    G->>G: public wire to validated IR
+    G->>G: select override or alias, then translate public wire to validated IR
     G->>A: POST /v1/generate via Dapr app ID
-    A->>R: read configured provider by own slug
+    A->>R: resolve configured Provider by own app ID
     A->>A: verify kind, provider ID and own app ID
-    A->>D: read instance-scoped credential
+    A->>D: read deployment-selected credential
     D-->>A: provider API key
-    A->>P: provider-specific request
+    A->>P: request via deployment base URL and API version
     P-->>A: provider-specific response
     A-->>G: validated IR response
-    G-->>C: public protocol response
+    G->>G: restore requested public Model alias
+    G-->>C: public protocol response without upstream-name leakage
 ```
 
 Dapr supplies discovery, mTLS, invocation and load balancing among replicas
 sharing the provider-specific app ID. The adapter validates the resolved route
-again before loading a credential, preventing cross-instance dispatch.
+again before loading a credential, preventing cross-instance dispatch. It never
+uses the Provider record as an endpoint or credential configuration source.
 
 ## Control-plane coordination
 
@@ -215,8 +221,9 @@ logical databases:
 
 Each component uses `keyPrefix: name`, so its scoped app IDs see the same keys
 inside that domain without sharing keys with another component. Provider
-credentials are never state values; provider records contain only Secret Store
-references.
+credentials, endpoints, API versions and Secret Store references are never
+state values; Provider records contain only routing identity, kind and lifecycle
+metadata.
 
 Resources use separate keys. Collection, unique alias and per-Provider Model
 indexes are updated with their entity in a Dapr state transaction and guarded
@@ -236,7 +243,9 @@ does not temporarily overlap two writers.
   session; the bearer credential remains server-side and every mutation is
   protected against CSRF.
 - Virtual keys are disclosed once and persisted as SHA-256 digests.
-- Provider records contain Secret references, never credential material.
+- Adapter deployments contain upstream endpoints/API versions and Secret
+  references; Provider records and IR contain none of them, and credential
+  material remains in the Secret Store.
 - Private control state is scoped only to `gwai-control-plane`; adapters never
   receive virtual-key state and gateways never receive private user state.
 - User/Model subject synchronization is restricted to the resource control-
@@ -263,3 +272,9 @@ falls back to permissive string routing. A 0.x upgrade therefore requires a
 fresh installation or an explicit reset and reprovisioning of users, Providers,
 Models and virtual keys. Reusing an old persistent Valkey volume without that
 decision is not a successful migration.
+
+Separately, adapter Helm values no longer accept `providerSlug` or
+`secretNames`. Every entry must supply `upstream.baseURL`,
+`upstream.apiVersion` and `upstream.secretRef`; preserve the `appID` that the
+corresponding Provider stores as `adapter_app_id`. There is no fallback from a
+deployed adapter to connection fields in old Provider records.

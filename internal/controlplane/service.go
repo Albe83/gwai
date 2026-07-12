@@ -5,13 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
-	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/platform"
 )
 
@@ -40,14 +38,11 @@ type UserInput struct {
 }
 
 type ProviderInput struct {
-	Slug         string             `json:"slug"`
-	Name         string             `json:"name"`
-	Kind         string             `json:"kind"`
-	BaseURL      string             `json:"base_url,omitempty"`
-	APIVersion   string             `json:"api_version,omitempty"`
-	AdapterAppID string             `json:"adapter_app_id"`
-	SecretRef    daprhttp.SecretRef `json:"secret_ref"`
-	Status       Status             `json:"status,omitempty"`
+	Slug         string `json:"slug"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	AdapterAppID string `json:"adapter_app_id"`
+	Status       Status `json:"status,omitempty"`
 }
 
 // SubjectRegistry is the only cross-service contract required by the
@@ -267,14 +262,11 @@ func (s *ResourceService) deleteUser(ctx context.Context, id string, preconditio
 }
 
 var appIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]{0,61}[a-z0-9])?$`)
-var apiVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 func normalizeProviderInput(input ProviderInput) (ProviderInput, error) {
 	input.Slug = strings.TrimSpace(input.Slug)
 	input.Name = strings.TrimSpace(input.Name)
 	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
-	input.BaseURL = strings.TrimRight(strings.TrimSpace(input.BaseURL), "/")
-	input.APIVersion = strings.TrimSpace(input.APIVersion)
 	input.AdapterAppID = strings.TrimSpace(input.AdapterAppID)
 	input.Status = normalizeStatus(input.Status)
 	if err := validateName(input.Name); err != nil {
@@ -284,49 +276,12 @@ func normalizeProviderInput(input ProviderInput) (ProviderInput, error) {
 		return input, err
 	}
 	switch input.Kind {
-	case ProviderKindAnthropic:
-		if input.BaseURL == "" {
-			input.BaseURL = "https://api.anthropic.com"
-		}
-		if input.APIVersion == "" {
-			input.APIVersion = "2023-06-01"
-		}
-	case ProviderKindOpenAIChat, ProviderKindOpenAIResponses:
-		if input.BaseURL == "" {
-			input.BaseURL = "https://api.openai.com"
-		}
-		if input.APIVersion == "" {
-			input.APIVersion = "v1"
-		}
-	case ProviderKindGemini:
-		if input.BaseURL == "" {
-			input.BaseURL = "https://generativelanguage.googleapis.com"
-		}
-		if input.APIVersion == "" {
-			input.APIVersion = "v1beta"
-		}
+	case ProviderKindAnthropic, ProviderKindOpenAIChat, ProviderKindOpenAIResponses, ProviderKindGemini:
 	default:
 		return input, &ValidationError{Field: "kind", Message: "must be anthropic, openai-chat, openai-responses, or gemini"}
 	}
-	parsed, err := url.ParseRequestURI(input.BaseURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return input, &ValidationError{Field: "base_url", Message: "must be an absolute HTTP(S) URL"}
-	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return input, &ValidationError{Field: "base_url", Message: "must not contain credentials, a query, or a fragment"}
-	}
-	if !apiVersionPattern.MatchString(input.APIVersion) {
-		return input, &ValidationError{Field: "api_version", Message: "must be a valid API version token"}
-	}
 	if input.AdapterAppID == "" || !appIDPattern.MatchString(input.AdapterAppID) {
 		return input, &ValidationError{Field: "adapter_app_id", Message: "must be a valid lowercase Dapr app ID"}
-	}
-	input.SecretRef.Store = strings.TrimSpace(input.SecretRef.Store)
-	input.SecretRef.Name = strings.TrimSpace(input.SecretRef.Name)
-	input.SecretRef.Key = strings.TrimSpace(input.SecretRef.Key)
-	input.SecretRef.Namespace = strings.TrimSpace(input.SecretRef.Namespace)
-	if input.SecretRef.Store == "" || input.SecretRef.Name == "" {
-		return input, &ValidationError{Field: "secret_ref", Message: "store and name are required"}
 	}
 	if err := validateStatus(input.Status); err != nil {
 		return input, err
@@ -345,9 +300,8 @@ func (s *ResourceService) CreateProvider(ctx context.Context, input ProviderInpu
 	}
 	now := s.now()
 	provider := Provider{
-		ID: id, Slug: input.Slug, Name: input.Name, Kind: input.Kind, BaseURL: input.BaseURL,
-		APIVersion: input.APIVersion, AdapterAppID: input.AdapterAppID,
-		SecretRef: input.SecretRef, Status: input.Status, CreatedAt: now, UpdatedAt: now,
+		ID: id, Slug: input.Slug, Name: input.Name, Kind: input.Kind,
+		AdapterAppID: input.AdapterAppID, Status: input.Status, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.providers.CreateProvider(ctx, provider); err != nil {
 		return Provider{}, err
@@ -395,9 +349,6 @@ func (s *ResourceService) updateProvider(ctx context.Context, id string, input P
 	old := current
 	current.Name = input.Name
 	current.Kind = input.Kind
-	current.BaseURL = input.BaseURL
-	current.APIVersion = input.APIVersion
-	current.SecretRef = input.SecretRef
 	current.Status = input.Status
 	current.UpdatedAt = s.now()
 	if err := s.providers.ReplaceProvider(ctx, old, current); err != nil {

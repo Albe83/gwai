@@ -145,7 +145,7 @@ func (f *fakeAPI) CreateProvider(_ context.Context, input controlplane.ProviderI
 		return controlplane.Provider{}, err
 	}
 	f.lastProviderInput = input
-	value := controlplane.Provider{ID: "prv_created", Slug: input.Slug, Name: input.Name, Kind: input.Kind, BaseURL: input.BaseURL, APIVersion: input.APIVersion, AdapterAppID: input.AdapterAppID, SecretRef: input.SecretRef, Status: input.Status}
+	value := controlplane.Provider{ID: "prv_created", Slug: input.Slug, Name: input.Name, Kind: input.Kind, AdapterAppID: input.AdapterAppID, Status: input.Status}
 	f.providers = append(f.providers, value)
 	return value, nil
 }
@@ -161,7 +161,7 @@ func (f *fakeAPI) UpdateProvider(_ context.Context, id string, input controlplan
 	for index := range f.providers {
 		if f.providers[index].ID == id {
 			current := &f.providers[index]
-			current.Name, current.Kind, current.BaseURL, current.APIVersion, current.SecretRef, current.Status = input.Name, input.Kind, input.BaseURL, input.APIVersion, input.SecretRef, input.Status
+			current.Name, current.Kind, current.Status = input.Name, input.Kind, input.Status
 			return Versioned[controlplane.Provider]{Value: *current, ETag: fakeETag}, nil
 		}
 	}
@@ -541,7 +541,7 @@ func TestSessionExpiresAndMutationRequiresCSRF(t *testing.T) {
 func TestCompleteCRUDLifecycleAndOneTimeReveal(t *testing.T) {
 	api := &fakeAPI{
 		users:     []controlplane.User{{ID: "usr_one", Name: "Ada", Email: "ada@example.com", Status: controlplane.StatusActive, Revision: 1}},
-		providers: []controlplane.Provider{{ID: "prv_one", Slug: "anthropic", Name: "Anthropic", Kind: controlplane.ProviderKindAnthropic, BaseURL: "https://api.anthropic.com", APIVersion: "2023-06-01", AdapterAppID: "gwai-anthropic", Status: controlplane.StatusActive}},
+		providers: []controlplane.Provider{{ID: "prv_one", Slug: "anthropic", Name: "Anthropic", Kind: controlplane.ProviderKindAnthropic, AdapterAppID: "gwai-anthropic", Status: controlplane.StatusActive}},
 		models:    []controlplane.Model{{ID: "mdl_one", Alias: "claude", ProviderID: "prv_one", UpstreamModel: "claude-sonnet", Status: controlplane.StatusActive, Revision: 1}},
 		secret:    "gwai_super_secret_once",
 	}
@@ -564,12 +564,16 @@ func TestCompleteCRUDLifecycleAndOneTimeReveal(t *testing.T) {
 		t.Fatalf("user update omitted If-Match: %q", api.lastUserETag)
 	}
 
-	providerValues := url.Values{"_csrf": {csrf}, "slug": {"openai"}, "name": {"OpenAI"}, "kind": {"openai-responses"}, "base_url": {"https://api.openai.com"}, "api_version": {"v1"}, "adapter_app_id": {"gwai-openai"}, "secret_store": {"kubernetes"}, "secret_name": {"openai-secret"}, "secret_key": {"api-key"}, "status": {"active"}}
+	providerForm := request(handler, http.MethodGet, "/providers/new", cookie, nil)
+	if providerForm.Code != http.StatusOK || strings.Contains(providerForm.Body.String(), `name="base_url"`) || strings.Contains(providerForm.Body.String(), `name="secret_name"`) {
+		t.Fatalf("provider form retained adapter-owned connection fields: %d %s", providerForm.Code, providerForm.Body.String())
+	}
+	providerValues := url.Values{"_csrf": {csrf}, "slug": {"openai"}, "name": {"OpenAI"}, "kind": {"openai-responses"}, "adapter_app_id": {"gwai-openai"}, "status": {"active"}}
 	createdProvider := request(handler, http.MethodPost, "/providers", cookie, providerValues)
-	if createdProvider.Code != http.StatusSeeOther || api.lastProviderInput.SecretRef.Name != "openai-secret" {
+	if createdProvider.Code != http.StatusSeeOther || api.lastProviderInput.AdapterAppID != "gwai-openai" {
 		t.Fatalf("provider create failed: %d input=%+v", createdProvider.Code, api.lastProviderInput)
 	}
-	providerUpdateValues := url.Values{"_csrf": {csrf}, "_etag": {fakeETag}, "slug": {"anthropic"}, "name": {"Anthropic updated"}, "kind": {"anthropic"}, "base_url": {"https://api.anthropic.com"}, "api_version": {"2023-06-01"}, "adapter_app_id": {"gwai-anthropic"}, "secret_store": {"kubernetes"}, "secret_name": {"anthropic-secret"}, "secret_key": {"api-key"}, "status": {"active"}}
+	providerUpdateValues := url.Values{"_csrf": {csrf}, "_etag": {fakeETag}, "slug": {"anthropic"}, "name": {"Anthropic updated"}, "kind": {"anthropic"}, "adapter_app_id": {"gwai-anthropic"}, "status": {"active"}}
 	providerUpdate := request(handler, http.MethodPost, "/providers/prv_one", cookie, providerUpdateValues)
 	if providerUpdate.Code != http.StatusSeeOther || api.lastProviderInput.Name != "Anthropic updated" || api.lastProviderInput.Slug != "anthropic" {
 		t.Fatalf("provider update failed: %d input=%+v", providerUpdate.Code, api.lastProviderInput)
@@ -582,9 +586,13 @@ func TestCompleteCRUDLifecycleAndOneTimeReveal(t *testing.T) {
 		t.Fatalf("provider lifecycle lost immutable fields: %+v", api.lastProviderInput)
 	}
 
-	modelValues := url.Values{"_csrf": {csrf}, "alias": {"haiku"}, "provider_id": {"prv_one"}, "upstream_model": {"claude-haiku"}, "status": {"active"}}
+	modelForm := request(handler, http.MethodGet, "/models/new", cookie, nil)
+	if modelForm.Code != http.StatusOK || strings.Contains(modelForm.Body.String(), `name="upstream_model" value="" maxlength="300" required`) {
+		t.Fatalf("model form still requires an upstream override: %d %s", modelForm.Code, modelForm.Body.String())
+	}
+	modelValues := url.Values{"_csrf": {csrf}, "alias": {"haiku"}, "provider_id": {"prv_one"}, "status": {"active"}}
 	createdModel := request(handler, http.MethodPost, "/models", cookie, modelValues)
-	if createdModel.Code != http.StatusSeeOther || api.lastModelInput.Alias != "haiku" || api.lastModelInput.ProviderID != "prv_one" {
+	if createdModel.Code != http.StatusSeeOther || api.lastModelInput.Alias != "haiku" || api.lastModelInput.ProviderID != "prv_one" || api.lastModelInput.UpstreamModel != "" {
 		t.Fatalf("model create failed: %d input=%+v", createdModel.Code, api.lastModelInput)
 	}
 	modelUpdate := request(handler, http.MethodPost, "/models/mdl_one", cookie, url.Values{

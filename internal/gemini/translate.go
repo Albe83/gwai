@@ -605,12 +605,15 @@ func ToIRResponse(response GenerateContentResponse, request ir.Request) (ir.Resp
 	return result, nil
 }
 
-func FromIRResponse(response ir.Response) (GenerateContentResponse, error) {
+func FromIRResponse(response ir.Response, requestedModel string) (GenerateContentResponse, error) {
 	if err := response.Validate(); err != nil {
 		return GenerateContentResponse{}, err
 	}
+	if strings.TrimSpace(requestedModel) == "" {
+		return GenerateContentResponse{}, fmt.Errorf("requested model is required")
+	}
 	result := GenerateContentResponse{
-		ModelVersion: response.Model,
+		ModelVersion: requestedModel,
 		ResponseID:   response.ProviderResponseID,
 		UsageMetadata: UsageMetadata{
 			PromptTokenCount: response.Usage.InputTokens, CandidatesTokenCount: response.Usage.OutputTokens,

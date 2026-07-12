@@ -373,6 +373,14 @@ func (r *ProviderRepository) GetProviderBySlug(ctx context.Context, slug string)
 	return r.GetProvider(ctx, id)
 }
 
+func (r *ProviderRepository) GetProviderByAdapterAppID(ctx context.Context, appID string) (Provider, error) {
+	id, err := lookup(ctx, r.repository.store, "provider-adapter-app-id", appID)
+	if err != nil {
+		return Provider{}, err
+	}
+	return r.GetProvider(ctx, id)
+}
+
 func (r *ProviderRepository) ListProviders(ctx context.Context) ([]Provider, error) {
 	return listResources[Provider](ctx, r.repository.store, "providers")
 }

@@ -154,9 +154,12 @@ func TestGeminiResponseRoundTripPreservesThoughtSignatureAndUsage(t *testing.T) 
 	if internal.Content[1].ToolCall.Signature != "signature-1" {
 		t.Fatalf("thought signature not preserved: %#v", internal.Content[1])
 	}
-	wire, err := FromIRResponse(internal)
+	wire, err := FromIRResponse(internal, "public-gemini")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if wire.ModelVersion != "public-gemini" {
+		t.Fatalf("upstream model leaked through modelVersion: %q", wire.ModelVersion)
 	}
 	if wire.Candidates[0].Content.Parts[1].ThoughtSignature != "signature-1" || wire.ResponseID != "provider-response" {
 		t.Fatalf("wire response lost Gemini metadata: %#v", wire)

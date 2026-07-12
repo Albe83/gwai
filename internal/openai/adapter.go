@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Albe83/gwai/internal/adapterconfig"
 	"github.com/Albe83/gwai/internal/controlplane"
 	"github.com/Albe83/gwai/internal/daprhttp"
 	"github.com/Albe83/gwai/internal/ir"
@@ -19,7 +20,7 @@ import (
 )
 
 type ProviderResolver interface {
-	ResolveProviderBySlug(context.Context, string) (controlplane.Provider, error)
+	ResolveProviderByAdapterAppID(context.Context, string) (controlplane.Provider, error)
 }
 
 type SecretResolver interface {
@@ -27,10 +28,9 @@ type SecretResolver interface {
 }
 
 type AdapterConfig struct {
-	ProviderSlug string
-	AppID        string
-	MaxBody      int64
-	AppToken     string
+	Runtime  adapterconfig.Config
+	MaxBody  int64
+	AppToken string
 }
 
 type AdapterHTTPHandler struct {
@@ -84,7 +84,7 @@ func (h *AdapterHTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusBadRequest, "Invalid IR request", err.Error(), nil)
 		return
 	}
-	provider, err := h.providers.ResolveProviderBySlug(r.Context(), h.config.ProviderSlug)
+	provider, err := h.providers.ResolveProviderByAdapterAppID(r.Context(), h.config.Runtime.AppID)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, controlplane.ErrNotFound) || errors.Is(err, controlplane.ErrForbidden) {
@@ -97,11 +97,11 @@ func (h *AdapterHTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid provider", "this adapter only accepts OpenAI Chat providers", nil)
 		return
 	}
-	if provider.ID != internalRequest.Route.ProviderID || provider.AdapterAppID != h.config.AppID {
+	if provider.ID != internalRequest.Route.ProviderID || provider.AdapterAppID != h.config.Runtime.AppID {
 		h.fail(w, r, http.StatusUnprocessableEntity, "Invalid route", "the request is not addressed to this provider adapter", nil)
 		return
 	}
-	apiKey, err := h.secrets.Get(r.Context(), provider.SecretRef)
+	apiKey, err := h.secrets.Get(r.Context(), h.config.Runtime.SecretRef)
 	if err != nil {
 		h.fail(w, r, http.StatusBadGateway, "Provider credential unavailable", "the provider credential could not be loaded", err)
 		return
@@ -120,7 +120,7 @@ func (h *AdapterHTTPHandler) generate(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusInternalServerError, "Encoding failed", "the provider request could not be encoded", err)
 		return
 	}
-	endpoint := strings.TrimRight(provider.BaseURL, "/") + "/" + strings.Trim(provider.APIVersion, "/") + "/chat/completions"
+	endpoint := h.config.Runtime.BaseURL + "/" + h.config.Runtime.APIVersion + "/chat/completions"
 	upstreamRequest, err := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		h.fail(w, r, http.StatusInternalServerError, "Request construction failed", "the provider request could not be created", err)
