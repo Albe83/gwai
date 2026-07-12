@@ -10,6 +10,8 @@ global:
 images:
   controlPlane:
     repository: gwai-control-plane
+  virtualKeyControlPlane:
+    repository: gwai-virtual-key-control-plane
 
 serviceAccount:
   create: true
@@ -25,17 +27,47 @@ security:
   # Empty existingSecret values make Helm generate and preserve random tokens.
   daprAPI:
     existingSecret: ""
+  # App-channel token shared only by provider adapters.
   appAPI:
+    existingSecret: ""
+  # Separate app-channel token for the virtual-key control-plane internal API.
+  virtualKeyAppAPI:
     existingSecret: ""
 
 dapr:
   enabled: true
-  stateStoreName: gwai-state
+  # Each state domain has a distinct Dapr component and Valkey logical DB.
+  # keyPrefix=name is set by the chart so the scoped applications see the
+  # same keys without exposing records owned by the other domains.
+  stateStores:
+    controlPlane:
+      name: gwai-control-state
+      redisDB: 0
+    providers:
+      name: gwai-provider-state
+      redisDB: 1
+    virtualKeys:
+      name: gwai-virtual-key-state
+      redisDB: 2
   logLevel: info
   apiLogging: false
   tracingSamplingRate: "1"
 
 controlPlane:
+  # Compound unique indexes currently require a single writer replica.
+  replicas: 1
+  port: 8080
+  maxBodyBytes: 1048576
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+virtualKeyControlPlane:
+  # Key and per-user indexes currently require a single writer replica.
   replicas: 1
   port: 8080
   maxBodyBytes: 1048576
@@ -124,6 +156,8 @@ providerAdapters:
 
 valkey:
   enabled: true
+  # Number of logical databases exposed by the bundled server.
+  databases: 16
   image:
     repository: valkey/valkey
     tag: 9.1.0-alpine

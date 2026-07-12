@@ -44,6 +44,7 @@ func (i *localInvoker) InvokeJSON(ctx context.Context, appID, method string, inp
 	}
 	request := httptest.NewRequestWithContext(ctx, http.MethodPost, method, bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("dapr-api-token", "internal-test-token")
 	recorder := httptest.NewRecorder()
 	i.mu.RLock()
 	handler := i.handlers[appID]
@@ -125,20 +126,29 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 	}))
 	defer providerServer.Close()
 
-	repository := controlplane.NewRepository(state.NewMemoryStore())
-	controlService := controlplane.NewService(repository)
-	runtime := controlplane.NewRuntime(repository)
-	controlHandler := controlplane.NewHTTPHandler(controlService, "admin-test-token", 1<<20, logger)
+	userRepository := controlplane.NewUserRepository(state.NewMemoryStore())
+	providerRepository := controlplane.NewProviderRepository(state.NewMemoryStore())
+	keyRepository := controlplane.NewVirtualKeyRepository(state.NewMemoryStore())
 	invoker := newLocalInvoker()
+	keyService := controlplane.NewVirtualKeyService(keyRepository, providerRepository)
+	keyHandler := controlplane.NewVirtualKeyHTTPHandler(keyService, "admin-test-token", "internal-test-token", 1<<20, logger)
+	invoker.register("gwai-virtual-key-control-plane", keyHandler)
+	controlService := controlplane.NewResourceService(
+		userRepository, providerRepository,
+		controlplane.NewRemoteSubjectRegistry(invoker, "gwai-virtual-key-control-plane"),
+	)
+	controlHandler := controlplane.NewResourceHTTPHandler(controlService, "admin-test-token", 1<<20, logger)
+	gatewayRuntime := controlplane.NewGatewayRuntime(keyRepository, providerRepository)
+	providerRuntime := controlplane.NewProviderRuntime(providerRepository)
 	adapterHandler := anthropic.NewHTTPHandler(
-		runtime, staticSecrets{value: "anthropic-secret"}, providerServer.Client(),
+		providerRuntime, staticSecrets{value: "anthropic-secret"}, providerServer.Client(),
 		anthropic.Config{
 			ProviderSlug: "anthropic-test", AppID: "gwai-anthropic-test", MaxBody: 10 << 20,
 			DefaultMaxOutputTokens: 4096,
 		}, logger,
 	)
 	invoker.register("gwai-anthropic-test", adapterHandler)
-	gatewayHandler := openaichat.NewHTTPHandler(runtime, invoker, 10<<20, time.Minute, logger)
+	gatewayHandler := openaichat.NewHTTPHandler(gatewayRuntime, invoker, 10<<20, time.Minute, logger)
 
 	user := adminRequest[controlplane.User](t, controlHandler, http.MethodPost, "/v1/users", controlplane.UserInput{Name: "Ada", Email: "ada@example.com"})
 	provider := adminRequest[controlplane.Provider](t, controlHandler, http.MethodPost, "/v1/providers", controlplane.ProviderInput{
@@ -147,7 +157,7 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 		SecretRef:    daprhttp.SecretRef{Store: "kubernetes", Name: "anthropic", Key: "api-key"},
 	})
 	qualifiedModel := provider.Slug + "/claude-test"
-	createdKey := adminRequest[controlplane.CreatedVirtualKey](t, controlHandler, http.MethodPost, "/v1/virtual-keys", controlplane.VirtualKeyInput{
+	createdKey := adminRequest[controlplane.CreatedVirtualKey](t, keyHandler, http.MethodPost, "/v1/virtual-keys", controlplane.VirtualKeyInput{
 		Name: "client", UserID: user.ID, AllowedModels: []string{qualifiedModel},
 	})
 
@@ -181,7 +191,7 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 		t.Fatalf("unexpected request received by Anthropic: %+v", captured)
 	}
 
-	responsesGateway := openairesponses.NewGatewayHTTPHandler(runtime, invoker, 10<<20, time.Minute, logger)
+	responsesGateway := openairesponses.NewGatewayHTTPHandler(gatewayRuntime, invoker, 10<<20, time.Minute, logger)
 	request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{
 		"model":"anthropic-test/claude-test","input":"Saluta","max_output_tokens":64,"store":false
 	}`)))
@@ -200,7 +210,7 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 		t.Fatalf("unexpected Responses output: %+v", responsesOutput)
 	}
 
-	anthropicGateway := anthropic.NewGatewayHTTPHandler(dataplane.NewDispatcher(runtime, invoker, time.Minute), 10<<20, logger)
+	anthropicGateway := anthropic.NewGatewayHTTPHandler(dataplane.NewDispatcher(gatewayRuntime, invoker, time.Minute), 10<<20, logger)
 	request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader([]byte(`{
 		"model":"anthropic-test/claude-test","max_tokens":64,"system":"Rispondi in italiano",
 		"messages":[{"role":"user","content":"Saluta"}]
@@ -221,7 +231,7 @@ func TestFourGatewayProtocolsToAnthropicAdapter(t *testing.T) {
 		t.Fatalf("unexpected Anthropic output: %+v", anthropicOutput)
 	}
 
-	geminiGateway := gemini.NewGatewayHTTPHandler(runtime, invoker, gemini.GatewayConfig{APIVersion: "v1beta", MaxBody: 10 << 20, RequestTimeout: time.Minute}, logger)
+	geminiGateway := gemini.NewGatewayHTTPHandler(gatewayRuntime, invoker, gemini.GatewayConfig{APIVersion: "v1beta", MaxBody: 10 << 20, RequestTimeout: time.Minute}, logger)
 	request = httptest.NewRequest(http.MethodPost, "/v1beta/models/anthropic-test/claude-test:generateContent", bytes.NewReader([]byte(`{
 		"systemInstruction":{"parts":[{"text":"Rispondi in italiano"}]},
 		"contents":[{"role":"user","parts":[{"text":"Saluta"}]}],

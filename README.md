@@ -30,30 +30,41 @@ See [protocol compatibility](docs/protocol-compatibility.md) for exact limits.
 ```mermaid
 flowchart LR
     Clients[OpenAI / Anthropic / Gemini clients] --> Gateways[Four protocol gateways]
-    CP[Control plane admin API] -->|write| State[(Dapr State Store)]
-    Gateways -->|read auth + route| State
+    CP[Resource control plane<br/>users + providers] -->|private users| CS[(Control state)]
+    CP -->|provider lifecycle| PS[(Provider state)]
+    CP -->|Dapr subject sync / fence| KP[Virtual-key control plane]
+    KP -->|key lifecycle + subject projection| KS[(Virtual-key state)]
+    KP -->|validate provider slugs| PS
+    Gateways -->|read key + subject| KS
+    Gateways -->|resolve route| PS
     Gateways -->|Dapr invocation: IR 2026-07-12| Adapters[Provider-specific adapter instance]
-    Adapters -->|read own provider| State
+    Adapters -->|read own provider| PS
     Adapters -->|Dapr Secret Store| Secrets[Kubernetes Secret]
     Adapters --> Providers[OpenAI / Anthropic / Gemini APIs]
 ```
 
 Gateways contain no provider HTTP client and adapters contain no client-gateway
 logic. The selected `adapter_app_id` is resolved from state and invoked through
-Dapr at `/v1/generate`. The control plane is not on the inference request path.
-The contract is [`2026-07-12.schema.json`](api/ir/2026-07-12.schema.json).
+Dapr at `/v1/generate`. Neither control-plane service is on the inference path.
+Users/providers and virtual keys have independently deployable administrative
+services. Three scoped state components keep private user data, provider runtime
+configuration and key authorization records in separate Valkey logical
+databases. The contract is
+[`2026-07-12.schema.json`](api/ir/2026-07-12.schema.json).
 
 ## What works
 
-- CRUD lifecycle APIs for users, virtual keys and providers.
+- Separate CRUD services for users/providers and virtual keys.
 - One-time virtual-key disclosure with exact `provider/model` allowlists,
   expiry and user/key/provider disablement.
+- Revisioned user-subject projection, atomic deletion fencing and fail-closed
+  gateway authorization.
 - Direct data-plane reads and provider-specific Dapr service invocation.
 - Per-provider identities, Secret scopes, Dapr mTLS/tokens/ACLs and retries.
 - Generic Helm lists for any mix of the four gateways and provider adapters.
 - Non-root distroless services and persistent Valkey state for local k3s.
 - Race-tested translators and an E2E path that sends all four client protocols
-  through one adapter while the control plane is unavailable.
+  through one adapter while both control-plane services are unavailable.
 
 ## Local k3s quick start
 
@@ -75,8 +86,8 @@ providers.
 
 ```bash
 make check       # formatting, vet, race tests, contract checks, Helm lint
-make build       # all control-plane, gateway and adapter binaries
-make images      # all nine OCI images
+make build       # both control-plane, all gateway and adapter binaries
+make images      # all ten OCI images
 make helm-lint
 ```
 
@@ -88,5 +99,7 @@ recorded in [dependencies](docs/dependencies.md).
 This is pre-release software. Before public exposure, add streaming, quotas,
 audit events, external observability, provider failover and a production-grade
 high-availability state store. IR `2026-07-12` is intentionally incompatible
-with the earlier pre-release IR; no automatic state or contract migration is
-provided.
+with the earlier pre-release IR. The control-plane decomposition also replaces
+the former `gwai-state` registry with three state domains. There is no automatic
+0.x state migration: use a fresh installation or deliberately reset the old
+pre-release state before upgrading.

@@ -2,7 +2,7 @@
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: {{ .Values.dapr.stateStoreName }}
+  name: {{ .Values.dapr.stateStores.controlPlane.name }}
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
 spec:
@@ -21,18 +21,86 @@ spec:
       {{- end }}
     - name: enableTLS
       value: {{ .Values.valkey.tls.enabled | quote }}
+    - name: redisDB
+      value: {{ .Values.dapr.stateStores.controlPlane.redisDB | quote }}
     - name: actorStateStore
       value: "false"
-    # Runtime entities are intentionally shared by the control plane, gateways,
-    # and provider adapters. The default app-id prefix would isolate their keys.
     - name: keyPrefix
       value: "name"
 scopes:
-  - {{ include "gwai.fullname" . }}-control-plane
+  - {{ include "gwai.controlPlaneName" . }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.dapr.stateStores.providers.name }}
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: {{ include "gwai.valkeyHost" . | quote }}
+    - name: redisPassword
+      {{- if or .Values.valkey.enabled .Values.valkey.auth.existingSecret }}
+      secretKeyRef:
+        name: {{ include "gwai.valkeyAuthSecretName" . }}
+        key: {{ .Values.valkey.auth.secretKey }}
+      {{- else }}
+      value: ""
+      {{- end }}
+    - name: enableTLS
+      value: {{ .Values.valkey.tls.enabled | quote }}
+    - name: redisDB
+      value: {{ .Values.dapr.stateStores.providers.redisDB | quote }}
+    - name: actorStateStore
+      value: "false"
+    # The provider registry is read by both data-plane edges. The component
+    # name prefix makes those app IDs address the same keys.
+    - name: keyPrefix
+      value: "name"
+scopes:
+  - {{ include "gwai.controlPlaneName" . }}
+  - {{ include "gwai.virtualKeyControlPlaneName" . }}
   {{- range $gateway := .Values.gateways }}
   - {{ include "gwai.gatewayName" (dict "root" $ "gateway" $gateway) }}
   {{- end }}
   {{- range $adapter := .Values.providerAdapters }}
   - {{ $adapter.appID | quote }}
+  {{- end }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.dapr.stateStores.virtualKeys.name }}
+  labels:
+    {{- include "gwai.labels" . | nindent 4 }}
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: {{ include "gwai.valkeyHost" . | quote }}
+    - name: redisPassword
+      {{- if or .Values.valkey.enabled .Values.valkey.auth.existingSecret }}
+      secretKeyRef:
+        name: {{ include "gwai.valkeyAuthSecretName" . }}
+        key: {{ .Values.valkey.auth.secretKey }}
+      {{- else }}
+      value: ""
+      {{- end }}
+    - name: enableTLS
+      value: {{ .Values.valkey.tls.enabled | quote }}
+    - name: redisDB
+      value: {{ .Values.dapr.stateStores.virtualKeys.redisDB | quote }}
+    - name: actorStateStore
+      value: "false"
+    - name: keyPrefix
+      value: "name"
+scopes:
+  - {{ include "gwai.virtualKeyControlPlaneName" . }}
+  {{- range $gateway := .Values.gateways }}
+  - {{ include "gwai.gatewayName" (dict "root" $ "gateway" $gateway) }}
   {{- end }}
 {{- end }}

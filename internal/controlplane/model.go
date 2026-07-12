@@ -25,6 +25,7 @@ type User struct {
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
 	Status    Status    `json:"status"`
+	Revision  uint64    `json:"revision"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -54,6 +55,17 @@ type VirtualKey struct {
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+// KeySubject is the authorization projection for the user that owns one or
+// more virtual keys. It lives with the virtual-key records so gateways can
+// fail closed without access to private control-plane state.
+type KeySubject struct {
+	UserID    string    `json:"user_id"`
+	Status    Status    `json:"status"`
+	Revision  uint64    `json:"revision"`
+	Deleted   bool      `json:"deleted"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type PublicVirtualKey struct {

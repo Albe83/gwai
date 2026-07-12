@@ -40,6 +40,7 @@ jobs:
       matrix:
         service:
           - control-plane
+          - virtual-key-control-plane
           - openai-gateway
           - openai-responses-gateway
           - anthropic-gateway

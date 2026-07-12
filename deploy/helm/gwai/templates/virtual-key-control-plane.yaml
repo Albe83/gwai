@@ -1,37 +1,39 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "gwai.controlPlaneName" . }}
+  name: {{ include "gwai.virtualKeyControlPlaneName" . }}
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
-    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/component: virtual-key-control-plane
 spec:
-  replicas: {{ .Values.controlPlane.replicas }}
+  replicas: {{ .Values.virtualKeyControlPlane.replicas }}
   strategy:
-    # Compound unique indexes are protected by a process-local mutex. Recreate
-    # preserves the single-writer invariant during upgrades.
+    # Key collection/per-user indexes require exactly one writer during rollout.
     type: Recreate
   selector:
     matchLabels:
       {{- include "gwai.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: control-plane
+      app.kubernetes.io/component: virtual-key-control-plane
   template:
     metadata:
       labels:
         {{- include "gwai.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: control-plane
+        app.kubernetes.io/component: virtual-key-control-plane
       annotations:
         checksum/admin-secret: {{ include (print $.Template.BasePath "/admin-secret.yaml") . | sha256sum }}
         checksum/dapr-token-secrets: {{ include (print $.Template.BasePath "/dapr-token-secrets.yaml") . | sha256sum }}
         {{- if .Values.dapr.enabled }}
         dapr.io/enabled: "true"
-        dapr.io/app-id: {{ include "gwai.controlPlaneName" . }}
-        dapr.io/config: {{ include "gwai.controlPlaneName" . }}
+        dapr.io/app-id: {{ include "gwai.virtualKeyControlPlaneName" . }}
+        dapr.io/app-port: {{ .Values.virtualKeyControlPlane.port | quote }}
+        dapr.io/app-protocol: http
+        dapr.io/config: {{ include "gwai.virtualKeyControlPlaneName" . }}
         dapr.io/log-level: {{ .Values.dapr.logLevel | quote }}
         dapr.io/log-as-json: "true"
         dapr.io/enable-api-logging: {{ .Values.dapr.apiLogging | quote }}
         dapr.io/disable-builtin-k8s-secret-store: "true"
         dapr.io/api-token-secret: {{ include "gwai.daprAPISecretName" . }}
+        dapr.io/app-token-secret: {{ include "gwai.virtualKeyAppAPISecretName" . }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -44,20 +46,18 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: control-plane
-          image: {{ include "gwai.image" (dict "root" . "repository" .Values.images.controlPlane.repository) }}
+        - name: virtual-key-control-plane
+          image: {{ include "gwai.image" (dict "root" . "repository" .Values.images.virtualKeyControlPlane.repository) }}
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           env:
             - name: PORT
-              value: {{ .Values.controlPlane.port | quote }}
-            - name: GWAI_CONTROL_STATE_STORE
-              value: {{ .Values.dapr.stateStores.controlPlane.name | quote }}
+              value: {{ .Values.virtualKeyControlPlane.port | quote }}
+            - name: GWAI_VIRTUAL_KEY_STATE_STORE
+              value: {{ .Values.dapr.stateStores.virtualKeys.name | quote }}
             - name: GWAI_PROVIDER_STATE_STORE
               value: {{ .Values.dapr.stateStores.providers.name | quote }}
-            - name: GWAI_VIRTUAL_KEY_CONTROL_APP_ID
-              value: {{ include "gwai.virtualKeyControlPlaneName" . | quote }}
             - name: GWAI_MAX_BODY_BYTES
-              value: {{ int64 .Values.controlPlane.maxBodyBytes | quote }}
+              value: {{ int64 .Values.virtualKeyControlPlane.maxBodyBytes | quote }}
             - name: GWAI_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -68,9 +68,14 @@ spec:
                 secretKeyRef:
                   name: {{ include "gwai.daprAPISecretName" . }}
                   key: token
+            - name: APP_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gwai.virtualKeyAppAPISecretName" . }}
+                  key: token
           ports:
             - name: http
-              containerPort: {{ .Values.controlPlane.port }}
+              containerPort: {{ .Values.virtualKeyControlPlane.port }}
           livenessProbe:
             httpGet:
               path: /livez
@@ -87,7 +92,7 @@ spec:
             capabilities:
               drop: ["ALL"]
           resources:
-            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+            {{- toYaml .Values.virtualKeyControlPlane.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -104,15 +109,15 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "gwai.controlPlaneName" . }}
+  name: {{ include "gwai.virtualKeyControlPlaneName" . }}
   labels:
     {{- include "gwai.labels" . | nindent 4 }}
-    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/component: virtual-key-control-plane
 spec:
   selector:
     {{- include "gwai.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/component: virtual-key-control-plane
   ports:
     - name: http
-      port: {{ .Values.controlPlane.port }}
+      port: {{ .Values.virtualKeyControlPlane.port }}
       targetPort: http

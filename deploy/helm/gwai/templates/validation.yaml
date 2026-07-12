@@ -1,8 +1,52 @@
 {{- if not .Values.dapr.enabled }}
 {{- fail "dapr.enabled=false is unsupported because gwai requires Dapr building blocks" }}
 {{- end }}
+{{- $stateStoreNames := dict }}
+{{- $stateStoreDBs := dict }}
+{{- range $domain, $store := .Values.dapr.stateStores }}
+{{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $store.name) }}
+{{- fail (printf "dapr.stateStores.%s.name must be a lowercase DNS label" $domain) }}
+{{- end }}
+{{- if hasKey $stateStoreNames $store.name }}
+{{- fail (printf "dapr.stateStores.%s.name must be unique" $domain) }}
+{{- end }}
+{{- $_ := set $stateStoreNames $store.name true }}
+{{- $dbValue := toString $store.redisDB }}
+{{- if not (regexMatch "^[0-9]+$" $dbValue) }}
+{{- fail (printf "dapr.stateStores.%s.redisDB must be a non-negative integer" $domain) }}
+{{- end }}
+{{- $db := toString (int $store.redisDB) }}
+{{- if and $.Values.valkey.enabled (ge (int $store.redisDB) (int $.Values.valkey.databases)) }}
+{{- fail (printf "dapr.stateStores.%s.redisDB must be lower than valkey.databases" $domain) }}
+{{- end }}
+{{- if hasKey $stateStoreDBs $db }}
+{{- fail (printf "dapr.stateStores.%s.redisDB must be unique" $domain) }}
+{{- end }}
+{{- $_ := set $stateStoreDBs $db true }}
+{{- end }}
+{{- if and .Values.valkey.enabled (le (int .Values.valkey.databases) 0) }}
+{{- fail "valkey.databases must be positive" }}
+{{- end }}
 {{- if and .Values.valkey.enabled .Values.valkey.tls.enabled }}
 {{- fail "valkey.tls.enabled is only supported for an external Valkey endpoint (valkey.enabled=false)" }}
+{{- end }}
+{{- if not .Values.images.controlPlane.repository }}
+{{- fail "images.controlPlane.repository is required" }}
+{{- end }}
+{{- if ne (int .Values.controlPlane.replicas) 1 }}
+{{- fail "controlPlane.replicas must remain 1 until distributed uniqueness locking is implemented" }}
+{{- end }}
+{{- if or (le (int .Values.controlPlane.port) 0) (le (int64 .Values.controlPlane.maxBodyBytes) 0) }}
+{{- fail "controlPlane port and maxBodyBytes must be positive" }}
+{{- end }}
+{{- if not .Values.images.virtualKeyControlPlane.repository }}
+{{- fail "images.virtualKeyControlPlane.repository is required" }}
+{{- end }}
+{{- if ne (int .Values.virtualKeyControlPlane.replicas) 1 }}
+{{- fail "virtualKeyControlPlane.replicas must remain 1 until distributed uniqueness locking is implemented" }}
+{{- end }}
+{{- if or (le (int .Values.virtualKeyControlPlane.port) 0) (le (int64 .Values.virtualKeyControlPlane.maxBodyBytes) 0) }}
+{{- fail "virtualKeyControlPlane port and maxBodyBytes must be positive" }}
 {{- end }}
 {{- if eq (len .Values.gateways) 0 }}
 {{- fail "at least one gateways entry is required" }}
@@ -10,6 +54,9 @@
 {{- if eq (len .Values.providerAdapters) 0 }}
 {{- fail "at least one providerAdapters entry is required" }}
 {{- end }}
+{{- $appIDs := dict }}
+{{- $_ := set $appIDs (include "gwai.controlPlaneName" .) true }}
+{{- $_ := set $appIDs (include "gwai.virtualKeyControlPlaneName" .) true }}
 {{- $gatewayNames := dict }}
 {{- range $index, $gateway := .Values.gateways }}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $gateway.name) }}
@@ -19,6 +66,11 @@
 {{- fail (printf "gateways[%d].name must be unique" $index) }}
 {{- end }}
 {{- $_ := set $gatewayNames $gateway.name true }}
+{{- $gatewayAppID := include "gwai.gatewayName" (dict "root" $ "gateway" $gateway) }}
+{{- if hasKey $appIDs $gatewayAppID }}
+{{- fail (printf "gateways[%d] generates a duplicate Dapr app ID" $index) }}
+{{- end }}
+{{- $_ := set $appIDs $gatewayAppID true }}
 {{- if not $gateway.image.repository }}
 {{- fail (printf "gateways[%d].image.repository is required" $index) }}
 {{- end }}
@@ -28,7 +80,6 @@
 {{- end }}
 {{- $names := dict }}
 {{- $slugs := dict }}
-{{- $appIDs := dict }}
 {{- range $index, $adapter := .Values.providerAdapters }}
 {{- if not (regexMatch "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$" $adapter.name) }}
 {{- fail (printf "providerAdapters[%d].name must be a lowercase DNS label" $index) }}
@@ -51,7 +102,7 @@
 {{- fail (printf "providerAdapters[%d].appID must be a valid lowercase Dapr app ID" $index) }}
 {{- end }}
 {{- if hasKey $appIDs $adapter.appID }}
-{{- fail (printf "providerAdapters[%d].appID must be unique" $index) }}
+{{- fail (printf "providerAdapters[%d].appID must be unique across every Dapr application" $index) }}
 {{- end }}
 {{- $_ := set $appIDs $adapter.appID true }}
 {{- if not $adapter.image.repository }}
